@@ -1,18 +1,16 @@
 package policy
 
-// ComputeReward converts an integer evaluation score (0..10) into internal currency and academic credits.
-// Rules (fixed):
-// - currency = score * 10 (maps 0..10 -> 0..100)
-// - credits = float64(score) / 2.5 (so 10 -> 4 credits)
-// - clamps score to [0,10]
-func ComputeReward(score int) (int64, float64) {
-	if score < 0 {
-		score = 0
+// MaxPoints is the upper bound for an evaluation score.
+const MaxPoints = 10
+
+// CreditsForPoints converts an integer score (0..MaxPoints) into academic credits.
+// Rule: credits = points / 2.5 (so 10 points -> 4 credits). Score is clamped.
+func CreditsForPoints(points int) float64 {
+	if points < 0 {
+		points = 0
 	}
-	if score > 10 {
-		score = 10
+	if points > MaxPoints {
+		points = MaxPoints
 	}
-	currency := int64(score * 10)
-	credits := float64(score) / 2.5
-	return currency, credits
+	return float64(points) / 2.5
 }

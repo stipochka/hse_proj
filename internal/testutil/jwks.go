@@ -51,10 +51,10 @@ func NewJWKSServer() (*JWKSServer, error) {
 	return &JWKSServer{Server: srv, privateKey: key}, nil
 }
 
-// Sign returns a signed JWT with the given claims.
+// Sign returns a signed JWT mirroring what Keycloak issues:
+// role in realm_access.roles and group membership in the `groups` claim.
 // role must be one of "student", "group_admin", "super_admin".
-// groupID is only meaningful for group_admin tokens; pass "" otherwise.
-func (j *JWKSServer) Sign(sub, email, role, groupID string) string {
+func (j *JWKSServer) Sign(sub, email, role string, groups ...string) string {
 	claims := jwt.MapClaims{
 		"sub":   sub,
 		"email": email,
@@ -64,8 +64,12 @@ func (j *JWKSServer) Sign(sub, email, role, groupID string) string {
 			"roles": []any{role},
 		},
 	}
-	if groupID != "" {
-		claims["group_id"] = groupID
+	if len(groups) > 0 {
+		g := make([]any, len(groups))
+		for i, v := range groups {
+			g[i] = v
+		}
+		claims["groups"] = g
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = "test-key"

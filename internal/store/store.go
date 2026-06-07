@@ -2,13 +2,19 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"edu-platform/internal/domain"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrNotFound is returned when a row does not exist.
+var ErrNotFound = errors.New("not found")
 
 type Store struct {
 	db *pgxpool.Pool
@@ -18,426 +24,298 @@ func New(db *pgxpool.Pool) *Store {
 	return &Store{db: db}
 }
 
-// ── Users ─────────────────────────────────────────────────────────────────────
+// ── Activities ──────────────────────────────────────────────────────────────
 
-// GetOrCreateUser upserts the user record on every authenticated request (JIT provisioning).
-// Email and role are kept in sync with Keycloak on each call.
-func (s *Store) GetOrCreateUser(ctx context.Context, keycloakID, email, role string) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO users (keycloak_id, email, role)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (keycloak_id) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role
-		 RETURNING id`,
-		keycloakID, email, role,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) GetUserByID(ctx context.Context, id int64) (*domain.User, error) {
-	var u domain.User
-	err := s.db.QueryRow(ctx,
-		`SELECT id, email, role, created_at FROM users WHERE id=$1`, id,
-	).Scan(&u.ID, &u.Email, &u.Role, &u.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-// ── Activities ────────────────────────────────────────────────────────────────
-
+// CreateActivity inserts a PENDING activity with a pre-generated pdf_key.
 func (s *Store) CreateActivity(ctx context.Context, a domain.Activity) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(ctx,
-		`INSERT INTO activities (user_id, title, description, category, status, activity_date)
-		 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		a.UserID, a.Title, a.Description, a.Category, a.Status, a.ActivityDate,
+		`INSERT INTO activities (student_id, student_group, title, category, description, pdf_key, status)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		a.StudentID, a.StudentGroup, a.Title, a.Category, a.Description, a.PDFKey, domain.StatusPending,
 	).Scan(&id)
 	return id, err
 }
 
+// ConfirmActivity moves a PENDING activity owned by studentID to SUBMITTED.
+func (s *Store) ConfirmActivity(ctx context.Context, id int64, studentID string) error {
+	ct, err := s.db.Exec(ctx,
+		`UPDATE activities SET status=$1
+		 WHERE id=$2 AND student_id=$3 AND status=$4`,
+		domain.StatusSubmitted, id, studentID, domain.StatusPending,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetActivity loads one activity and its evaluation (if any).
 func (s *Store) GetActivity(ctx context.Context, id int64) (*domain.Activity, error) {
 	var a domain.Activity
 	err := s.db.QueryRow(ctx,
-		`SELECT id, user_id, title, description, category, status, activity_date, created_at
+		`SELECT id, student_id, student_group, title, category, description, pdf_key, status, created_at
 		 FROM activities WHERE id=$1`, id,
-	).Scan(&a.ID, &a.UserID, &a.Title, &a.Description, &a.Category, &a.Status, &a.ActivityDate, &a.CreatedAt)
+	).Scan(&a.ID, &a.StudentID, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
-	files, _ := s.GetActivityFiles(ctx, id)
-	a.Files = files
+	ev, err := s.getEvaluation(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	a.Evaluation = ev
 	return &a, nil
 }
 
-func (s *Store) ListActivities(ctx context.Context, userID int64) ([]domain.Activity, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, user_id, title, description, category, status, activity_date, created_at
-		 FROM activities WHERE user_id=$1 ORDER BY created_at DESC`, userID,
-	)
-	if err != nil {
-		return nil, err
+// ListMyActivities returns a student's own activities (newest first).
+func (s *Store) ListMyActivities(ctx context.Context, studentID, status, category string) ([]domain.Activity, error) {
+	where := []string{"a.student_id=$1"}
+	args := []any{studentID}
+	idx := 2
+	if status != "" {
+		where = append(where, fmt.Sprintf("a.status=$%d", idx))
+		args = append(args, status)
+		idx++
 	}
-	defer rows.Close()
-	var list []domain.Activity
-	for rows.Next() {
-		var a domain.Activity
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Title, &a.Description, &a.Category, &a.Status, &a.ActivityDate, &a.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, a)
+	if category != "" {
+		where = append(where, fmt.Sprintf("a.category=$%d", idx))
+		args = append(args, category)
+		idx++
 	}
-	return list, rows.Err()
+	return s.queryActivities(ctx, strings.Join(where, " AND "), args)
 }
-
-func (s *Store) UpdateActivityStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.db.Exec(ctx, `UPDATE activities SET status=$1 WHERE id=$2`, status, id)
-	return err
-}
-
-func (s *Store) DeleteActivity(ctx context.Context, id, ownerID int64) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM activities WHERE id=$1 AND user_id=$2`, id, ownerID)
-	return err
-}
-
-// ── Activity files ────────────────────────────────────────────────────────────
-
-func (s *Store) CreateActivityFile(ctx context.Context, f domain.ActivityFile) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO activity_files (activity_id, filename, s3_key, size_bytes)
-		 VALUES ($1,$2,$3,$4) RETURNING id`,
-		f.ActivityID, f.Filename, f.S3Key, f.SizeBytes,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) GetActivityFile(ctx context.Context, id int64) (*domain.ActivityFile, error) {
-	var f domain.ActivityFile
-	err := s.db.QueryRow(ctx,
-		`SELECT id, activity_id, filename, s3_key, size_bytes, created_at
-		 FROM activity_files WHERE id=$1`, id,
-	).Scan(&f.ID, &f.ActivityID, &f.Filename, &f.S3Key, &f.SizeBytes, &f.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &f, nil
-}
-
-func (s *Store) GetActivityFiles(ctx context.Context, activityID int64) ([]domain.ActivityFile, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, activity_id, filename, s3_key, size_bytes, created_at
-		 FROM activity_files WHERE activity_id=$1 ORDER BY created_at`, activityID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []domain.ActivityFile
-	for rows.Next() {
-		var f domain.ActivityFile
-		if err := rows.Scan(&f.ID, &f.ActivityID, &f.Filename, &f.S3Key, &f.SizeBytes, &f.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, f)
-	}
-	return list, rows.Err()
-}
-
-// ── Evaluations ───────────────────────────────────────────────────────────────
-
-func (s *Store) CreateEvaluation(ctx context.Context, e domain.Evaluation) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO evaluations (activity_id, evaluator_id, score, currency, credits, comment)
-		 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		e.ActivityID, e.EvaluatorID, e.Score, e.Currency, e.Credits, e.Comment,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) ListEvaluationsByUser(ctx context.Context, userID int64) ([]domain.Evaluation, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT e.id, e.activity_id, e.evaluator_id, e.score, e.currency, e.credits, e.comment, e.created_at
-		 FROM evaluations e
-		 JOIN activities a ON a.id = e.activity_id
-		 WHERE a.user_id=$1
-		 ORDER BY e.created_at DESC`, userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []domain.Evaluation
-	for rows.Next() {
-		var ev domain.Evaluation
-		if err := rows.Scan(&ev.ID, &ev.ActivityID, &ev.EvaluatorID, &ev.Score, &ev.Currency, &ev.Credits, &ev.Comment, &ev.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, ev)
-	}
-	return list, rows.Err()
-}
-
-// ── Transactions ──────────────────────────────────────────────────────────────
-
-func (s *Store) AddTransaction(ctx context.Context, t domain.Transaction) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO transactions (user_id, amount, reason) VALUES ($1,$2,$3) RETURNING id`,
-		t.UserID, t.Amount, t.Reason,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) GetBalance(ctx context.Context, userID int64) (int64, error) {
-	var balance int64
-	err := s.db.QueryRow(ctx,
-		`SELECT COALESCE(SUM(amount),0) FROM transactions WHERE user_id=$1`, userID,
-	).Scan(&balance)
-	return balance, err
-}
-
-func (s *Store) ListTransactions(ctx context.Context, userID int64) ([]domain.Transaction, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, user_id, amount, reason, created_at FROM transactions
-		 WHERE user_id=$1 ORDER BY created_at DESC`, userID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []domain.Transaction
-	for rows.Next() {
-		var t domain.Transaction
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Amount, &t.Reason, &t.CreatedAt); err != nil {
-			return nil, err
-		}
-		list = append(list, t)
-	}
-	return list, rows.Err()
-}
-
-// ── Groups ────────────────────────────────────────────────────────────────────
-
-func (s *Store) CreateGroup(ctx context.Context, name, stream string, courseYear int) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO groups (name, stream, course_year) VALUES ($1,$2,$3) RETURNING id`,
-		name, stream, courseYear,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) ListGroups(ctx context.Context) ([]domain.Group, error) {
-	rows, err := s.db.Query(ctx,
-		`SELECT id, name, COALESCE(stream,''), COALESCE(course_year,0) FROM groups ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []domain.Group
-	for rows.Next() {
-		var g domain.Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.Stream, &g.CourseYear); err != nil {
-			return nil, err
-		}
-		list = append(list, g)
-	}
-	return list, rows.Err()
-}
-
-func (s *Store) AssignUserToGroup(ctx context.Context, userID, groupID int64) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO user_groups (user_id, group_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-		userID, groupID,
-	)
-	return err
-}
-
-func (s *Store) RemoveUserFromGroup(ctx context.Context, userID, groupID int64) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM user_groups WHERE user_id=$1 AND group_id=$2`, userID, groupID)
-	return err
-}
-
-// IsUserInGroup returns true when the given user belongs to the given group.
-func (s *Store) IsUserInGroup(ctx context.Context, userID, groupID int64) (bool, error) {
-	var exists bool
-	err := s.db.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM user_groups WHERE user_id=$1 AND group_id=$2)`,
-		userID, groupID,
-	).Scan(&exists)
-	return exists, err
-}
-
-// ── Courses ───────────────────────────────────────────────────────────────────
-
-func (s *Store) CreateCourse(ctx context.Context, name string) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(ctx,
-		`INSERT INTO courses (name) VALUES ($1) RETURNING id`, name,
-	).Scan(&id)
-	return id, err
-}
-
-func (s *Store) ListCourses(ctx context.Context) ([]domain.Course, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name FROM courses ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var list []domain.Course
-	for rows.Next() {
-		var c domain.Course
-		if err := rows.Scan(&c.ID, &c.Name); err != nil {
-			return nil, err
-		}
-		list = append(list, c)
-	}
-	return list, rows.Err()
-}
-
-func (s *Store) AssignUserToCourse(ctx context.Context, userID, courseID int64) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO user_courses (user_id, course_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-		userID, courseID,
-	)
-	return err
-}
-
-// ── Admin activities feed ─────────────────────────────────────────────────────
 
 // ActivityFilter holds optional filters for the admin activity feed.
-// GroupID is mandatory for group_admin (enforced in the handler) and optional for super_admin.
+// Group is enforced for group_admin (set in the handler) and optional for super_admin.
 type ActivityFilter struct {
-	GroupID   int64
-	StudentID int64
+	Group     string
+	StudentID string
 	Status    string
 	Category  string
-	Limit     int
-	Offset    int
 }
 
-func (s *Store) ListActivitiesAdmin(ctx context.Context, f ActivityFilter) ([]domain.Activity, error) {
+// ListActivities returns activities for the admin feed, scoped by filter.
+func (s *Store) ListActivities(ctx context.Context, f ActivityFilter) ([]domain.Activity, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	idx := 1
-
-	if f.GroupID != 0 {
-		where = append(where, fmt.Sprintf(
-			"a.user_id IN (SELECT user_id FROM user_groups WHERE group_id=$%d)", idx))
-		args = append(args, f.GroupID)
+	add := func(cond string, val any) {
+		where = append(where, fmt.Sprintf(cond, idx))
+		args = append(args, val)
 		idx++
 	}
-	if f.StudentID != 0 {
-		where = append(where, fmt.Sprintf("a.user_id=$%d", idx))
-		args = append(args, f.StudentID)
-		idx++
+	if f.Group != "" {
+		add("a.student_group=$%d", f.Group)
+	}
+	if f.StudentID != "" {
+		add("a.student_id=$%d", f.StudentID)
 	}
 	if f.Status != "" {
-		where = append(where, fmt.Sprintf("a.status=$%d", idx))
-		args = append(args, f.Status)
-		idx++
+		add("a.status=$%d", f.Status)
 	}
 	if f.Category != "" {
-		where = append(where, fmt.Sprintf("a.category=$%d", idx))
-		args = append(args, f.Category)
-		idx++
+		add("a.category=$%d", f.Category)
 	}
+	return s.queryActivities(ctx, strings.Join(where, " AND "), args)
+}
 
-	limit := f.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-
-	q := fmt.Sprintf(`
-		SELECT a.id, a.user_id, a.title, a.description, a.category, a.status, a.activity_date, a.created_at
+func (s *Store) queryActivities(ctx context.Context, where string, args []any) ([]domain.Activity, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT a.id, a.student_id, a.student_group, a.title, a.category, a.description, a.pdf_key, a.status, a.created_at,
+		       e.id, e.activity_id, e.admin_id, e.points, e.credits, e.comment, e.evaluated_at
 		FROM activities a
-		WHERE %s
-		ORDER BY a.created_at DESC
-		LIMIT %d OFFSET $%d`,
-		strings.Join(where, " AND "), limit, idx)
-	args = append(args, f.Offset)
-
-	rows, err := s.db.Query(ctx, q, args...)
+		LEFT JOIN evaluations e ON e.activity_id = a.id
+		WHERE `+where+`
+		ORDER BY a.created_at DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var list []domain.Activity
+	list := []domain.Activity{}
 	for rows.Next() {
 		var a domain.Activity
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Title, &a.Description, &a.Category, &a.Status, &a.ActivityDate, &a.CreatedAt); err != nil {
+		// Evaluation columns are nullable (LEFT JOIN), so scan into pointers.
+		var (
+			evID, evActID      *int64
+			evAdmin, evComment *string
+			evPoints           *int
+			evCredits          *float64
+			evAt               *time.Time
+		)
+		if err := rows.Scan(
+			&a.ID, &a.StudentID, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt,
+			&evID, &evActID, &evAdmin, &evPoints, &evCredits, &evComment, &evAt,
+		); err != nil {
 			return nil, err
+		}
+		if evID != nil {
+			a.Evaluation = &domain.Evaluation{
+				ID: *evID, ActivityID: *evActID, AdminID: *evAdmin,
+				Points: *evPoints, Credits: *evCredits, Comment: *evComment, EvaluatedAt: *evAt,
+			}
 		}
 		list = append(list, a)
 	}
 	return list, rows.Err()
 }
 
-// ── Admin reports ─────────────────────────────────────────────────────────────
-
-// ReportFilter holds optional filters for the aggregate student report.
-type ReportFilter struct {
-	UserID   int64
-	GroupID  int64
-	CourseID int64
-	Stream   string
+// DeleteActivity removes a PENDING activity owned by the student (used for orphan cleanup / cancel).
+func (s *Store) DeleteActivity(ctx context.Context, id int64, studentID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM activities WHERE id=$1 AND student_id=$2`, id, studentID)
+	return err
 }
 
-func (s *Store) AdminReport(ctx context.Context, f ReportFilter) ([]domain.StudentStats, error) {
-	where := []string{"u.role = 'student'"}
+// ── Evaluations ─────────────────────────────────────────────────────────────
+
+func (s *Store) getEvaluation(ctx context.Context, activityID int64) (*domain.Evaluation, error) {
+	var e domain.Evaluation
+	err := s.db.QueryRow(ctx,
+		`SELECT id, activity_id, admin_id, points, credits, comment, evaluated_at
+		 FROM evaluations WHERE activity_id=$1`, activityID,
+	).Scan(&e.ID, &e.ActivityID, &e.AdminID, &e.Points, &e.Credits, &e.Comment, &e.EvaluatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// UpsertEvaluation writes (or replaces) the evaluation and sets the activity status
+// in a single transaction. status must be EVALUATED or REJECTED.
+func (s *Store) UpsertEvaluation(ctx context.Context, e domain.Evaluation, status string) (int64, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var id int64
+	err = tx.QueryRow(ctx,
+		`INSERT INTO evaluations (activity_id, admin_id, points, credits, comment)
+		 VALUES ($1,$2,$3,$4,$5)
+		 ON CONFLICT (activity_id) DO UPDATE
+		   SET admin_id=EXCLUDED.admin_id, points=EXCLUDED.points,
+		       credits=EXCLUDED.credits, comment=EXCLUDED.comment, evaluated_at=now()
+		 RETURNING id`,
+		e.ActivityID, e.AdminID, e.Points, e.Credits, e.Comment,
+	).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE activities SET status=$1 WHERE id=$2`, status, e.ActivityID); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit(ctx)
+}
+
+// ── Aggregates ──────────────────────────────────────────────────────────────
+
+// DashboardMe aggregates one student's own activities and awarded points.
+func (s *Store) DashboardMe(ctx context.Context, studentID string) (domain.DashboardMe, error) {
+	d := domain.DashboardMe{ByStatus: map[string]int{}, ByCategory: map[string]int{}}
+
+	err := s.db.QueryRow(ctx, `
+		SELECT
+		  COALESCE(SUM(e.points),0),
+		  COALESCE(SUM(e.credits),0),
+		  COUNT(DISTINCT a.id)
+		FROM activities a
+		LEFT JOIN evaluations e ON e.activity_id = a.id
+		WHERE a.student_id=$1`, studentID,
+	).Scan(&d.TotalPoints, &d.TotalCredits, &d.ActivityCount)
+	if err != nil {
+		return d, err
+	}
+
+	rows, err := s.db.Query(ctx, `SELECT status, COUNT(*) FROM activities WHERE student_id=$1 GROUP BY status`, studentID)
+	if err != nil {
+		return d, err
+	}
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			rows.Close()
+			return d, err
+		}
+		d.ByStatus[k] = n
+	}
+	rows.Close()
+
+	rows, err = s.db.Query(ctx, `SELECT COALESCE(NULLIF(category,''),'uncategorized'), COUNT(*) FROM activities WHERE student_id=$1 GROUP BY 1`, studentID)
+	if err != nil {
+		return d, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return d, err
+		}
+		d.ByCategory[k] = n
+	}
+	return d, rows.Err()
+}
+
+// SummaryFilter holds optional filters for the admin summary.
+type SummaryFilter struct {
+	Group     string
+	StudentID string
+	Category  string
+}
+
+// Summary aggregates points/credits/counts per student, scoped by filter.
+func (s *Store) Summary(ctx context.Context, f SummaryFilter) ([]domain.StudentStats, error) {
+	where := []string{"1=1"}
 	args := []any{}
 	idx := 1
-
-	if f.UserID != 0 {
-		where = append(where, fmt.Sprintf("u.id = $%d", idx))
-		args = append(args, f.UserID)
+	add := func(cond string, val any) {
+		where = append(where, fmt.Sprintf(cond, idx))
+		args = append(args, val)
 		idx++
 	}
-	if f.GroupID != 0 {
-		where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM user_groups ug WHERE ug.user_id=u.id AND ug.group_id=$%d)", idx))
-		args = append(args, f.GroupID)
-		idx++
+	if f.Group != "" {
+		add("a.student_group=$%d", f.Group)
 	}
-	if f.CourseID != 0 {
-		where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM user_courses uc WHERE uc.user_id=u.id AND uc.course_id=$%d)", idx))
-		args = append(args, f.CourseID)
-		idx++
+	if f.StudentID != "" {
+		add("a.student_id=$%d", f.StudentID)
 	}
-	if f.Stream != "" {
-		where = append(where, fmt.Sprintf("EXISTS (SELECT 1 FROM user_groups ug2 JOIN groups g ON g.id=ug2.group_id WHERE ug2.user_id=u.id AND g.stream=$%d)", idx))
-		args = append(args, f.Stream)
-		idx++
+	if f.Category != "" {
+		add("a.category=$%d", f.Category)
 	}
 
-	q := fmt.Sprintf(`
-		SELECT
-		  u.id,
-		  u.email,
-		  COALESCE((SELECT g.name FROM user_groups ug JOIN groups g ON g.id=ug.group_id WHERE ug.user_id=u.id LIMIT 1), '') AS group_name,
-		  COALESCE(SUM(t.amount), 0) AS total_currency,
-		  COALESCE((SELECT SUM(ev.credits) FROM evaluations ev JOIN activities a ON a.id=ev.activity_id WHERE a.user_id=u.id), 0) AS total_credits,
-		  COUNT(DISTINCT act.id) AS activity_count
-		FROM users u
-		LEFT JOIN transactions t ON t.user_id = u.id
-		LEFT JOIN activities act ON act.user_id = u.id
-		WHERE %s
-		GROUP BY u.id, u.email
-		ORDER BY u.email`, strings.Join(where, " AND "))
-
-	rows, err := s.db.Query(ctx, q, args...)
+	rows, err := s.db.Query(ctx, `
+		SELECT a.student_id,
+		       COALESCE(MAX(a.student_group),'') AS student_group,
+		       COALESCE(SUM(e.points),0)  AS total_points,
+		       COALESCE(SUM(e.credits),0) AS total_credits,
+		       COUNT(DISTINCT a.id)       AS activity_count,
+		       COUNT(e.id)                AS evaluated_count
+		FROM activities a
+		LEFT JOIN evaluations e ON e.activity_id = a.id
+		WHERE `+strings.Join(where, " AND ")+`
+		GROUP BY a.student_id
+		ORDER BY total_points DESC, a.student_id`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var list []domain.StudentStats
+	list := []domain.StudentStats{}
 	for rows.Next() {
 		var ss domain.StudentStats
-		if err := rows.Scan(&ss.UserID, &ss.Email, &ss.GroupName, &ss.TotalCurrency, &ss.TotalCredits, &ss.ActivityCount); err != nil {
+		if err := rows.Scan(&ss.StudentID, &ss.StudentGroup, &ss.TotalPoints, &ss.TotalCredits, &ss.ActivityCount, &ss.EvaluatedCount); err != nil {
 			return nil, err
 		}
 		list = append(list, ss)

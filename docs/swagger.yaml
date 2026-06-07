@@ -1,0 +1,433 @@
+basePath: /
+definitions:
+  edu-platform_internal_domain.Activity:
+    properties:
+      category:
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      evaluation:
+        $ref: '#/definitions/edu-platform_internal_domain.Evaluation'
+      id:
+        type: integer
+      status:
+        type: string
+      student_group:
+        description: snapshot
+        type: string
+      student_id:
+        description: Keycloak sub
+        type: string
+      title:
+        type: string
+    type: object
+  edu-platform_internal_domain.DashboardMe:
+    properties:
+      activity_count:
+        type: integer
+      by_category:
+        additionalProperties:
+          type: integer
+        type: object
+      by_status:
+        additionalProperties:
+          type: integer
+        type: object
+      total_credits:
+        type: number
+      total_points:
+        type: integer
+    type: object
+  edu-platform_internal_domain.Evaluation:
+    properties:
+      activity_id:
+        type: integer
+      admin_id:
+        description: Keycloak sub of the evaluator
+        type: string
+      comment:
+        type: string
+      credits:
+        type: number
+      evaluated_at:
+        type: string
+      id:
+        type: integer
+      points:
+        type: integer
+    type: object
+  edu-platform_internal_domain.StudentStats:
+    properties:
+      activity_count:
+        type: integer
+      evaluated_count:
+        type: integer
+      student_group:
+        type: string
+      student_id:
+        type: string
+      total_credits:
+        type: number
+      total_points:
+        type: integer
+    type: object
+  internal_handlers.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  internal_handlers.evaluationRequest:
+    properties:
+      comment:
+        type: string
+      credits:
+        description: optional; defaults from points
+        type: number
+      points:
+        type: integer
+      reject:
+        type: boolean
+    type: object
+  internal_handlers.fileURLResponse:
+    properties:
+      file_url:
+        type: string
+    type: object
+  internal_handlers.uploadURLRequest:
+    properties:
+      category:
+        type: string
+      description:
+        type: string
+      title:
+        type: string
+    type: object
+  internal_handlers.uploadURLResponse:
+    properties:
+      activity_id:
+        type: integer
+      pdf_key:
+        type: string
+      upload_url:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: Учёт студенческих активностей. Аутентификация — через Keycloak (Bearer
+    JWT); пользователи/группы живут в Keycloak, не в этом сервисе.
+  title: Edu Platform API
+  version: "1.0"
+paths:
+  /activities:
+    get:
+      description: group_admin sees only their own group; super_admin may filter by
+        ?group.
+      parameters:
+      - description: Group (super_admin only)
+        in: query
+        name: group
+        type: string
+      - description: Filter by status
+        in: query
+        name: status
+        type: string
+      - description: Filter by category
+        in: query
+        name: category
+        type: string
+      - description: Filter by Keycloak student id
+        in: query
+        name: student_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/edu-platform_internal_domain.Activity'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Admin activity feed (group-scoped)
+      tags:
+      - admin
+  /activities/{id}:
+    get:
+      parameters:
+      - description: Activity id
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/edu-platform_internal_domain.Activity'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get activity details
+      tags:
+      - activities
+  /activities/{id}/confirm:
+    post:
+      description: Verifies the object exists in S3 (HEAD) and moves the activity
+        from PENDING to SUBMITTED.
+      parameters:
+      - description: Activity id
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/edu-platform_internal_domain.Activity'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Confirm a finished PDF upload
+      tags:
+      - activities
+  /activities/{id}/evaluation:
+    post:
+      consumes:
+      - application/json
+      description: Awards points/credits (status EVALUATED) or rejects with a comment
+        (status REJECTED). group_admin is restricted to their own group.
+      parameters:
+      - description: Activity id
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Evaluation
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handlers.evaluationRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/edu-platform_internal_domain.Evaluation'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Evaluate or reject an activity
+      tags:
+      - evaluation
+  /activities/{id}/file:
+    get:
+      description: Returns a short-lived presigned GET URL. The browser fetches the
+        PDF directly from S3.
+      parameters:
+      - description: Activity id
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handlers.fileURLResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get a presigned URL to view/download the activity PDF
+      tags:
+      - activities
+  /activities/my:
+    get:
+      parameters:
+      - description: Filter by status
+        in: query
+        name: status
+        type: string
+      - description: Filter by category
+        in: query
+        name: category
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/edu-platform_internal_domain.Activity'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: List my activities
+      tags:
+      - activities
+  /activities/upload-url:
+    post:
+      consumes:
+      - application/json
+      description: Creates a PENDING activity (group snapshotted from the token) and
+        returns a presigned PUT URL. The browser uploads the PDF directly to S3, then
+        calls confirm.
+      parameters:
+      - description: Activity metadata
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handlers.uploadURLRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/internal_handlers.uploadURLResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/internal_handlers.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Create activity and get a presigned PDF upload URL
+      tags:
+      - activities
+  /dashboard/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/edu-platform_internal_domain.DashboardMe'
+      security:
+      - BearerAuth: []
+      summary: Personal dashboard aggregates
+      tags:
+      - dashboard
+  /dashboard/summary:
+    get:
+      parameters:
+      - description: Group (super_admin only)
+        in: query
+        name: group
+        type: string
+      - description: Filter by category
+        in: query
+        name: category
+        type: string
+      - description: Filter by Keycloak student id
+        in: query
+        name: student_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/edu-platform_internal_domain.StudentStats'
+            type: array
+      security:
+      - BearerAuth: []
+      summary: Aggregate stats per student (group-scoped)
+      tags:
+      - admin
+  /export/me:
+    get:
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: CSV
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Export my activities as CSV
+      tags:
+      - dashboard
+  /export/summary:
+    get:
+      parameters:
+      - description: Group (super_admin only)
+        in: query
+        name: group
+        type: string
+      - description: Filter by category
+        in: query
+        name: category
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: CSV
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Export the admin summary as CSV
+      tags:
+      - admin
+securityDefinitions:
+  BearerAuth:
+    description: Введите "Bearer {token}", где token — access token из Keycloak.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
