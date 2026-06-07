@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"edu-platform/internal/domain"
 
@@ -19,78 +18,34 @@ func New(db *pgxpool.Pool) *Store {
 	return &Store{db: db}
 }
 
-type RefreshToken struct {
-	Token     string
-	UserID    int64
-	Role      string
-	ExpiresAt time.Time
-}
+// ── Users ─────────────────────────────────────────────────────────────────────
 
-// ── Users ────────────────────────────────────────────────────────────────────
-
-func (s *Store) CreateUser(ctx context.Context, email, passHash, role string) (int64, error) {
-	if role != "student" && role != "teacher" && role != "admin" {
-		role = "student"
-	}
+// GetOrCreateUser upserts the user record on every authenticated request (JIT provisioning).
+// Email and role are kept in sync with Keycloak on each call.
+func (s *Store) GetOrCreateUser(ctx context.Context, keycloakID, email, role string) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id`,
-		email, passHash, role,
+		`INSERT INTO users (keycloak_id, email, role)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (keycloak_id) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role
+		 RETURNING id`,
+		keycloakID, email, role,
 	).Scan(&id)
 	return id, err
-}
-
-func (s *Store) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	var u domain.User
-	err := s.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at FROM users WHERE email=$1`, email,
-	).Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
 }
 
 func (s *Store) GetUserByID(ctx context.Context, id int64) (*domain.User, error) {
 	var u domain.User
 	err := s.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at FROM users WHERE id=$1`, id,
-	).Scan(&u.ID, &u.Email, &u.Password, &u.Role, &u.CreatedAt)
+		`SELECT id, email, role, created_at FROM users WHERE id=$1`, id,
+	).Scan(&u.ID, &u.Email, &u.Role, &u.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
-// ── Refresh tokens ───────────────────────────────────────────────────────────
-
-func (s *Store) SaveRefreshToken(ctx context.Context, t RefreshToken) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES ($1,$2,$3)`,
-		t.Token, t.UserID, t.ExpiresAt,
-	)
-	return err
-}
-
-func (s *Store) GetRefreshToken(ctx context.Context, token string) (*RefreshToken, error) {
-	var t RefreshToken
-	err := s.db.QueryRow(ctx,
-		`SELECT rt.token, rt.user_id, rt.expires_at, u.role
-		 FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id
-		 WHERE rt.token=$1`, token,
-	).Scan(&t.Token, &t.UserID, &t.ExpiresAt, &t.Role)
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
-}
-
-func (s *Store) DeleteRefreshToken(ctx context.Context, token string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM refresh_tokens WHERE token=$1`, token)
-	return err
-}
-
-// ── Activities ───────────────────────────────────────────────────────────────
+// ── Activities ────────────────────────────────────────────────────────────────
 
 func (s *Store) CreateActivity(ctx context.Context, a domain.Activity) (int64, error) {
 	var id int64
@@ -133,7 +88,7 @@ func (s *Store) ListActivities(ctx context.Context, userID int64) ([]domain.Acti
 		}
 		list = append(list, a)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 func (s *Store) UpdateActivityStatus(ctx context.Context, id int64, status string) error {
@@ -187,10 +142,10 @@ func (s *Store) GetActivityFiles(ctx context.Context, activityID int64) ([]domai
 		}
 		list = append(list, f)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
-// ── Evaluations ──────────────────────────────────────────────────────────────
+// ── Evaluations ───────────────────────────────────────────────────────────────
 
 func (s *Store) CreateEvaluation(ctx context.Context, e domain.Evaluation) (int64, error) {
 	var id int64
@@ -222,10 +177,10 @@ func (s *Store) ListEvaluationsByUser(ctx context.Context, userID int64) ([]doma
 		}
 		list = append(list, ev)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
-// ── Transactions ─────────────────────────────────────────────────────────────
+// ── Transactions ──────────────────────────────────────────────────────────────
 
 func (s *Store) AddTransaction(ctx context.Context, t domain.Transaction) (int64, error) {
 	var id int64
@@ -261,10 +216,10 @@ func (s *Store) ListTransactions(ctx context.Context, userID int64) ([]domain.Tr
 		}
 		list = append(list, t)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
-// ── Groups ───────────────────────────────────────────────────────────────────
+// ── Groups ────────────────────────────────────────────────────────────────────
 
 func (s *Store) CreateGroup(ctx context.Context, name, stream string, courseYear int) (int64, error) {
 	var id int64
@@ -276,7 +231,8 @@ func (s *Store) CreateGroup(ctx context.Context, name, stream string, courseYear
 }
 
 func (s *Store) ListGroups(ctx context.Context) ([]domain.Group, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, name, COALESCE(stream,''), COALESCE(course_year,0) FROM groups ORDER BY name`)
+	rows, err := s.db.Query(ctx,
+		`SELECT id, name, COALESCE(stream,''), COALESCE(course_year,0) FROM groups ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +245,7 @@ func (s *Store) ListGroups(ctx context.Context) ([]domain.Group, error) {
 		}
 		list = append(list, g)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 func (s *Store) AssignUserToGroup(ctx context.Context, userID, groupID int64) error {
@@ -305,7 +261,17 @@ func (s *Store) RemoveUserFromGroup(ctx context.Context, userID, groupID int64) 
 	return err
 }
 
-// ── Courses ──────────────────────────────────────────────────────────────────
+// IsUserInGroup returns true when the given user belongs to the given group.
+func (s *Store) IsUserInGroup(ctx context.Context, userID, groupID int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM user_groups WHERE user_id=$1 AND group_id=$2)`,
+		userID, groupID,
+	).Scan(&exists)
+	return exists, err
+}
+
+// ── Courses ───────────────────────────────────────────────────────────────────
 
 func (s *Store) CreateCourse(ctx context.Context, name string) (int64, error) {
 	var id int64
@@ -329,7 +295,7 @@ func (s *Store) ListCourses(ctx context.Context) ([]domain.Course, error) {
 		}
 		list = append(list, c)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 func (s *Store) AssignUserToCourse(ctx context.Context, userID, courseID int64) error {
@@ -340,9 +306,80 @@ func (s *Store) AssignUserToCourse(ctx context.Context, userID, courseID int64) 
 	return err
 }
 
+// ── Admin activities feed ─────────────────────────────────────────────────────
+
+// ActivityFilter holds optional filters for the admin activity feed.
+// GroupID is mandatory for group_admin (enforced in the handler) and optional for super_admin.
+type ActivityFilter struct {
+	GroupID   int64
+	StudentID int64
+	Status    string
+	Category  string
+	Limit     int
+	Offset    int
+}
+
+func (s *Store) ListActivitiesAdmin(ctx context.Context, f ActivityFilter) ([]domain.Activity, error) {
+	where := []string{"1=1"}
+	args := []any{}
+	idx := 1
+
+	if f.GroupID != 0 {
+		where = append(where, fmt.Sprintf(
+			"a.user_id IN (SELECT user_id FROM user_groups WHERE group_id=$%d)", idx))
+		args = append(args, f.GroupID)
+		idx++
+	}
+	if f.StudentID != 0 {
+		where = append(where, fmt.Sprintf("a.user_id=$%d", idx))
+		args = append(args, f.StudentID)
+		idx++
+	}
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("a.status=$%d", idx))
+		args = append(args, f.Status)
+		idx++
+	}
+	if f.Category != "" {
+		where = append(where, fmt.Sprintf("a.category=$%d", idx))
+		args = append(args, f.Category)
+		idx++
+	}
+
+	limit := f.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+
+	q := fmt.Sprintf(`
+		SELECT a.id, a.user_id, a.title, a.description, a.category, a.status, a.activity_date, a.created_at
+		FROM activities a
+		WHERE %s
+		ORDER BY a.created_at DESC
+		LIMIT %d OFFSET $%d`,
+		strings.Join(where, " AND "), limit, idx)
+	args = append(args, f.Offset)
+
+	rows, err := s.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []domain.Activity
+	for rows.Next() {
+		var a domain.Activity
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Title, &a.Description, &a.Category, &a.Status, &a.ActivityDate, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}
+
 // ── Admin reports ─────────────────────────────────────────────────────────────
 
-// ReportFilter задаёт необязательные фильтры для сводного отчёта.
+// ReportFilter holds optional filters for the aggregate student report.
 type ReportFilter struct {
 	UserID   int64
 	GroupID  int64
@@ -405,5 +442,5 @@ func (s *Store) AdminReport(ctx context.Context, f ReportFilter) ([]domain.Stude
 		}
 		list = append(list, ss)
 	}
-	return list, nil
+	return list, rows.Err()
 }

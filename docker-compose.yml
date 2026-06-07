@@ -11,6 +11,20 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/realms/master"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -31,13 +45,15 @@ services:
   app:
     build: .
     depends_on:
-      - db
-      - minio
+      keycloak:
+        condition: service_healthy
+      db:
+        condition: service_started
+      minio:
+        condition: service_healthy
     environment:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/edu?sslmode=disable
-      - JWT_SECRET=replace-me-with-secure-secret
-      - ACCESS_TOKEN_EXP=15m
-      - REFRESH_TOKEN_EXP=168h
+      - KEYCLOAK_JWKS_URL=http://keycloak:8080/realms/edu/protocol/openid-connect/certs
       - S3_ENDPOINT=minio:9000
       - S3_ACCESS_KEY=minioadmin
       - S3_SECRET_KEY=minioadmin

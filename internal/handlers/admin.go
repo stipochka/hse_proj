@@ -10,20 +10,74 @@ import (
 	"edu-platform/internal/store"
 )
 
+// ListAdminActivities serves the activity feed for group_admin and super_admin.
+// group_admin is restricted to their own group (from the JWT claim); super_admin may pass group_id as a query param.
+func (h *Handler) ListAdminActivities(w http.ResponseWriter, r *http.Request) {
+	role := r.Context().Value(ctxRoleKey{}).(string)
+	tokenGroupID := r.Context().Value(ctxGroupIDKey{}).(int64)
+
+	q := r.URL.Query()
+
+	f := store.ActivityFilter{
+		Status:   q.Get("status"),
+		Category: q.Get("category"),
+	}
+
+	if v := q.Get("student_id"); v != "" {
+		f.StudentID, _ = strconv.ParseInt(v, 10, 64)
+	}
+	if v := q.Get("limit"); v != "" {
+		f.Limit, _ = strconv.Atoi(v)
+	}
+	if v := q.Get("offset"); v != "" {
+		f.Offset, _ = strconv.Atoi(v)
+	}
+
+	switch role {
+	case "group_admin":
+		// Hard-scoped to the group from the token; query param is ignored.
+		f.GroupID = tokenGroupID
+	case "super_admin":
+		if v := q.Get("group_id"); v != "" {
+			f.GroupID, _ = strconv.ParseInt(v, 10, 64)
+		}
+	}
+
+	list, err := h.st.ListActivitiesAdmin(r.Context(), f)
+	if err != nil {
+		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []domain.Activity{}
+	}
+	json.NewEncoder(w).Encode(list)
+}
+
+// AdminReports returns aggregate statistics per student.
+// group_admin sees only their own group; super_admin can filter freely.
 func (h *Handler) AdminReports(w http.ResponseWriter, r *http.Request) {
+	role := r.Context().Value(ctxRoleKey{}).(string)
+	tokenGroupID := r.Context().Value(ctxGroupIDKey{}).(int64)
+
 	q := r.URL.Query()
 	f := store.ReportFilter{}
 
-	if v := q.Get("user_id"); v != "" {
-		f.UserID, _ = strconv.ParseInt(v, 10, 64)
+	switch role {
+	case "group_admin":
+		f.GroupID = tokenGroupID
+	case "super_admin":
+		if v := q.Get("group_id"); v != "" {
+			f.GroupID, _ = strconv.ParseInt(v, 10, 64)
+		}
+		if v := q.Get("user_id"); v != "" {
+			f.UserID, _ = strconv.ParseInt(v, 10, 64)
+		}
+		if v := q.Get("course_id"); v != "" {
+			f.CourseID, _ = strconv.ParseInt(v, 10, 64)
+		}
+		f.Stream = q.Get("stream")
 	}
-	if v := q.Get("group_id"); v != "" {
-		f.GroupID, _ = strconv.ParseInt(v, 10, 64)
-	}
-	if v := q.Get("course_id"); v != "" {
-		f.CourseID, _ = strconv.ParseInt(v, 10, 64)
-	}
-	f.Stream = q.Get("stream")
 
 	stats, err := h.st.AdminReport(r.Context(), f)
 	if err != nil {
@@ -53,6 +107,7 @@ func (h *Handler) AdminReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 

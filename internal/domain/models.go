@@ -62,7 +62,7 @@ type Group struct {
 	CourseYear int    `json:"course_year"`
 }
 
-// StudentStats — агрегат для отчётов администратора
+// StudentStats is the aggregate row returned by the admin report query.
 type StudentStats struct {
 	UserID        int64   `json:"user_id"`
 	Email         string  `json:"email"`

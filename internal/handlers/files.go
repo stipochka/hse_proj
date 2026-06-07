@@ -15,17 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-var extContentType = map[string]string{
-	".pdf":  "application/pdf",
-	".doc":  "application/msword",
-	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".zip":  "application/zip",
-	".txt":  "text/plain",
-}
-
 func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	uid := r.Context().Value(ctxUserKey{}).(int64)
 
@@ -60,16 +49,13 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	contentType, ok := extContentType[ext]
-	if !ok {
-		http.Error(w, "file type not allowed", http.StatusBadRequest)
+	if !allowedExts[ext] {
+		http.Error(w, "only PDF files are allowed", http.StatusBadRequest)
 		return
 	}
 
-	// Ключ: activities/<activity_id>/<timestamp>_<random><ext>
 	s3Key := fmt.Sprintf("activities/%d/%d_%s%s", activityID, time.Now().UnixNano(), randomHex(8), ext)
-
-	if err := h.s3c.Upload(r.Context(), s3Key, contentType, f, fh.Size); err != nil {
+	if err := h.s3c.Upload(r.Context(), s3Key, "application/pdf", f, fh.Size); err != nil {
 		http.Error(w, "upload error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -82,7 +68,6 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	fileID, err := h.st.CreateActivityFile(r.Context(), fileRec)
 	if err != nil {
-		// Откатываем загруженный объект
 		_ = h.s3c.Delete(r.Context(), s3Key)
 		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -115,7 +100,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	obj, info, err := h.s3c.Download(r.Context(), f.S3Key)
+	obj, meta, err := h.s3c.Download(r.Context(), f.S3Key)
 	if err != nil {
 		http.Error(w, "download error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -123,7 +108,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	defer obj.Close()
 
 	w.Header().Set("Content-Disposition", `attachment; filename="`+f.Filename+`"`)
-	w.Header().Set("Content-Type", info.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	io.Copy(w, obj)
 }

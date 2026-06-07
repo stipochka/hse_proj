@@ -9,12 +9,19 @@ import (
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	uid := r.Context().Value(ctxUserKey{}).(int64)
-	u, err := h.st.GetUserByID(r.Context(), uid)
-	if err != nil {
-		http.Error(w, "user not found", http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(u)
+	role := r.Context().Value(ctxRoleKey{}).(string)
+	groupID := r.Context().Value(ctxGroupIDKey{}).(int64)
+	email := r.Context().Value(ctxEmailKey{}).(string)
+
+	bal, _ := h.st.GetBalance(r.Context(), uid)
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"user_id":  uid,
+		"email":    email,
+		"role":     role,
+		"group_id": groupID,
+		"balance":  bal,
+	})
 }
 
 func (h *Handler) MyBalance(w http.ResponseWriter, r *http.Request) {

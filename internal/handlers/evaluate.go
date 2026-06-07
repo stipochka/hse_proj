@@ -32,6 +32,22 @@ func (h *Handler) Evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	role := r.Context().Value(ctxRoleKey{}).(string)
+	groupID := r.Context().Value(ctxGroupIDKey{}).(int64)
+
+	// group_admin may only evaluate students who belong to their own group.
+	if role == "group_admin" {
+		ok, err := h.st.IsUserInGroup(r.Context(), in.StudentID, groupID)
+		if err != nil {
+			http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "student does not belong to your group", http.StatusForbidden)
+			return
+		}
+	}
+
 	evaluatorID := r.Context().Value(ctxUserKey{}).(int64)
 
 	currency := in.Currency
@@ -60,5 +76,7 @@ func (h *Handler) Evaluate(w http.ResponseWriter, r *http.Request) {
 		t := domain.Transaction{UserID: in.StudentID, Amount: currency, Reason: "evaluation reward"}
 		_, _ = h.st.AddTransaction(r.Context(), t)
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{"evaluation_id": id})
 }

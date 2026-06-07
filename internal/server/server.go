@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"edu-platform/internal/handlers"
+	"edu-platform/internal/jwks"
 	"edu-platform/internal/s3"
 	"edu-platform/internal/store"
 
@@ -21,15 +22,19 @@ func New(ctx context.Context, pool *pgxpool.Pool) (http.Handler, error) {
 		return nil, fmt.Errorf("s3 init: %w", err)
 	}
 
-	st := store.New(pool)
-	h := handlers.New(st, s3c)
-	r := chi.NewRouter()
+	jw, err := newJWKSClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("jwks init: %w", err)
+	}
 
-	// Public
-	r.Post("/signup", h.SignUp)
-	r.Post("/login", h.Login)
-	r.Post("/refresh", h.Refresh)
-	r.Post("/logout", h.Auth(h.Logout))
+	st := store.New(pool)
+	return NewRouter(handlers.New(st, s3c, jw)), nil
+}
+
+// NewRouter wires all routes to the given handler and returns the chi router.
+// Exported so integration tests can build a server without env-var dependencies.
+func NewRouter(h *handlers.Handler) http.Handler {
+	r := chi.NewRouter()
 
 	// Student: own profile & stats
 	r.Get("/me", h.Auth(h.Me))
@@ -43,28 +48,35 @@ func New(ctx context.Context, pool *pgxpool.Pool) (http.Handler, error) {
 	r.Get("/activities/{id}", h.Auth(h.GetActivity))
 	r.Delete("/activities/{id}", h.Auth(h.DeleteActivity))
 
-	// Files
+	// Files (PDF only)
 	r.Post("/files", h.Auth(h.UploadFile))
 	r.Get("/files/{id}", h.Auth(h.DownloadFile))
 
-	// Teacher / admin: evaluate
-	r.Post("/evaluate", h.AuthTeacher(h.Evaluate))
+	// group_admin + super_admin: evaluate & activity feed
+	r.Get("/admin/activities", h.AuthGroupAdmin(h.ListAdminActivities))
+	r.Post("/evaluate", h.AuthGroupAdmin(h.Evaluate))
 
-	// Admin: reports
-	r.Get("/admin/reports", h.AuthAdmin(h.AdminReports))
+	// group_admin + super_admin: reports
+	r.Get("/admin/reports", h.AuthGroupAdmin(h.AdminReports))
 
-	// Admin: groups
-	r.Get("/admin/groups", h.AuthAdmin(h.ListGroups))
-	r.Post("/admin/groups", h.AuthAdmin(h.CreateGroup))
-	r.Post("/admin/groups/assign", h.AuthAdmin(h.AssignUserToGroup))
-	r.Post("/admin/groups/remove", h.AuthAdmin(h.RemoveUserFromGroup))
+	// super_admin only: groups & courses management
+	r.Get("/admin/groups", h.AuthSuperAdmin(h.ListGroups))
+	r.Post("/admin/groups", h.AuthSuperAdmin(h.CreateGroup))
+	r.Post("/admin/groups/assign", h.AuthSuperAdmin(h.AssignUserToGroup))
+	r.Post("/admin/groups/remove", h.AuthSuperAdmin(h.RemoveUserFromGroup))
+	r.Get("/admin/courses", h.AuthSuperAdmin(h.ListCourses))
+	r.Post("/admin/courses", h.AuthSuperAdmin(h.CreateCourse))
+	r.Post("/admin/courses/assign", h.AuthSuperAdmin(h.AssignUserToCourse))
 
-	// Admin: courses
-	r.Get("/admin/courses", h.AuthAdmin(h.ListCourses))
-	r.Post("/admin/courses", h.AuthAdmin(h.CreateCourse))
-	r.Post("/admin/courses/assign", h.AuthAdmin(h.AssignUserToCourse))
+	return r
+}
 
-	return r, nil
+func newJWKSClient(ctx context.Context) (*jwks.Client, error) {
+	url := os.Getenv("KEYCLOAK_JWKS_URL")
+	if url == "" {
+		url = "http://keycloak:8080/realms/edu/protocol/openid-connect/certs"
+	}
+	return jwks.New(ctx, url)
 }
 
 func newS3Client(ctx context.Context) (*s3.Client, error) {

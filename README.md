@@ -1,8 +1,8 @@
 # edu-platform
 
-Серверная часть платформы для учёта студенческой активности. Студенты загружают материалы о своих активностях в течение года, преподаватели и администраторы оценивают их во внутренней валюте и академических зачётных единицах. Каждый студент видит собственную статистику; администратор получает сводные отчёты с фильтрацией и выгрузкой в CSV.
+Серверная часть платформы учёта студенческой активности. Студенты загружают PDF-материалы об активностях за год, кураторы групп оценивают их во внутренней валюте и зачётных единицах, администратор видит сводную статистику.
 
-Написано на Go, хранилище — PostgreSQL, маршрутизация — chi.
+Стек: Go, PostgreSQL, Keycloak (аутентификация), MinIO (хранилище файлов).
 
 ## Запуск
 
@@ -10,9 +10,18 @@
 docker compose up --build
 ```
 
-Поднимает три сервиса: PostgreSQL, MinIO (S3-совместимое хранилище файлов) и само приложение. Веб-консоль MinIO доступна на `http://localhost:9001`.
+Стартуют четыре сервиса:
 
-Миграции применяются вручную в указанном порядке:
+| Сервис | Адрес |
+|---|---|
+| Приложение | `http://localhost:8080` |
+| Keycloak | `http://localhost:8180` |
+| MinIO API | `http://localhost:9000` |
+| MinIO консоль | `http://localhost:9001` |
+
+### Миграции
+
+Применять по порядку:
 
 ```bash
 psql "$DATABASE_URL" -f migrations/001_init.sql
@@ -21,141 +30,157 @@ psql "$DATABASE_URL" -f migrations/003_evals_transactions.sql
 psql "$DATABASE_URL" -f migrations/004_add_roles.sql
 psql "$DATABASE_URL" -f migrations/005_groups_courses.sql
 psql "$DATABASE_URL" -f migrations/006_activities_extend.sql
+psql "$DATABASE_URL" -f migrations/007_activity_files_s3.sql
+psql "$DATABASE_URL" -f migrations/008_keycloak.sql
 ```
+
+## Настройка Keycloak
+
+1. Открыть `http://localhost:8180`, войти `admin / admin`.
+2. Создать realm с именем `edu`.
+3. Создать роли realm: `student`, `group_admin`, `super_admin`.
+4. Для пользователей с ролью `group_admin` добавить атрибут `group_id` — числовой ID группы из нашей БД.
+5. В настройках клиента добавить **User Attribute Mapper**: атрибут `group_id` → JWT claim `group_id`.
+6. Создать клиент для фронтенда (тип `public`, Standard flow).
+
+После этого фронтенд получает токены напрямую от Keycloak и передаёт их бэкенду через `Authorization: Bearer <token>`. Бэкенд только верифицирует подпись через JWKS и читает claims — своей базы сессий нет.
+
+При первом запросе от нового пользователя бэкенд автоматически создаёт запись в таблице `users` (JIT-провизионинг).
 
 ## Переменные окружения
 
 | Переменная | Описание | По умолчанию |
 |---|---|---|
 | `DATABASE_URL` | Строка подключения к PostgreSQL | — |
-| `JWT_SECRET` | Секрет для подписи JWT | `dev-secret` |
-| `ACCESS_TOKEN_EXP` | Время жизни access-токена | `15m` |
-| `REFRESH_TOKEN_EXP` | Время жизни refresh-токена | `168h` |
 | `PORT` | Порт HTTP-сервера | `8080` |
-| `S3_ENDPOINT` | Адрес S3-совместимого хранилища | `minio:9000` |
+| `KEYCLOAK_JWKS_URL` | JWKS-эндпоинт реалма Keycloak | `http://keycloak:8080/realms/edu/...` |
+| `S3_ENDPOINT` | Адрес MinIO | `minio:9000` |
 | `S3_ACCESS_KEY` | Access key | `minioadmin` |
 | `S3_SECRET_KEY` | Secret key | `minioadmin` |
-| `S3_BUCKET` | Имя бакета | `edu-files` |
-| `S3_USE_SSL` | Использовать TLS | `false` |
+| `S3_BUCKET` | Бакет для файлов | `edu-files` |
+| `S3_USE_SSL` | TLS для S3 | `false` |
 
 ## Роли
 
-- `student` — создаёт активности, загружает файлы, видит свою статистику. Роль назначается автоматически при регистрации.
-- `teacher` — оценивает активности студентов.
-- `admin` — все права teacher плюс управление группами, курсами и доступ к отчётам.
+Роли задаются в Keycloak (`realm_access.roles` в JWT).
 
-Роль кодируется в JWT-токене (claim `role`) и проверяется middleware на каждом маршруте.
+| Роль | Что может |
+|---|---|
+| `student` | создаёт активности, загружает PDF, смотрит свою статистику |
+| `group_admin` | видит ленту активностей своей группы, выставляет оценки, смотрит отчёты по своей группе |
+| `super_admin` | всё то же, что group_admin, но для любой группы; управляет группами и курсами |
+
+`group_admin` привязан к группе через claim `group_id` в токене. Бэкенд не даст ему видеть чужую группу, даже если передать другой `group_id` в параметрах запроса.
 
 ## API
 
-### Аутентификация
-
-```
-POST /signup              Регистрация (всегда role=student)
-POST /login               Вход, возвращает access_token и refresh_token
-POST /refresh             Обновление access_token по refresh_token
-POST /logout              Инвалидация refresh_token
-```
+Все ручки требуют заголовок `Authorization: Bearer <token>`.
 
 ### Профиль студента
 
-```
-GET  /me                  Профиль текущего пользователя
-GET  /me/balance          Текущий баланс внутренней валюты
-GET  /me/transactions     История начислений
-GET  /me/evaluations      Все оценки по своим активностям
-```
+| Метод | Путь | Описание |
+|---|---|---|
+| GET | `/me` | Профиль: user_id, email, role, group_id, balance |
+| GET | `/me/balance` | Текущий баланс внутренней валюты |
+| GET | `/me/transactions` | История начислений |
+| GET | `/me/evaluations` | Оценки по своим активностям |
 
 ### Активности
 
-```
-POST   /activities        Создать активность (поля: title, description, category, activity_date, draft)
-GET    /activities        Список своих активностей
-GET    /activities/{id}   Детали активности (teacher/admin видят любую)
-DELETE /activities/{id}   Удалить свою активность
-```
+| Метод | Путь | Описание |
+|---|---|---|
+| POST | `/activities` | Создать активность |
+| GET | `/activities` | Список своих активностей |
+| GET | `/activities/{id}` | Детали активности |
+| DELETE | `/activities/{id}` | Удалить свою активность |
 
-Поле `status` принимает значения: `draft`, `submitted`, `under_review`, `approved`, `rejected`. При оценке активность автоматически переходит в `approved`.
-
-### Файлы
-
-```
-POST /files               Загрузить файл (form-data: file + activity_id). Лимит 20 МБ.
-GET  /files/{id}          Скачать файл
-```
-
-Файлы хранятся в MinIO по ключу `activities/{activity_id}/{timestamp}_{random}{ext}`. Разрешённые расширения: `.pdf`, `.doc`, `.docx`, `.png`, `.jpg`, `.jpeg`, `.zip`, `.txt`. Лимит — 20 МБ.
-
-### Оценивание (teacher, admin)
-
-```
-POST /evaluate
-```
-
-Тело запроса:
-
+Тело `POST /activities`:
 ```json
 {
-  "activity_id": 1,
-  "student_id":  2,
-  "score":       8,
-  "comment":     "Хорошая работа"
+  "title": "Олимпиада по математике",
+  "description": "Призовое место, региональный этап",
+  "category": "olympiad",
+  "activity_date": "2025-04-10",
+  "draft": false
 }
 ```
 
-`score` — целое от 0 до 10. Если `currency` не передан, рассчитывается автоматически: `currency = score * 10`, `credits = score / 2.5`.
+Поле `status` жизненный цикл: `draft` → `submitted` → `approved` / `rejected`.
 
-### Отчёты (admin)
+### Файлы
 
+| Метод | Путь | Описание |
+|---|---|---|
+| POST | `/files` | Загрузить PDF |
+| GET | `/files/{id}` | Скачать файл |
+
+`POST /files` — multipart/form-data, поля `file` (PDF, макс. 20 МБ) и `activity_id`. Файлы хранятся в MinIO по ключу `activities/{activity_id}/{timestamp}_{random}.pdf`.
+
+### Оценивание — group_admin, super_admin
+
+`POST /evaluate`:
+```json
+{
+  "activity_id": 7,
+  "student_id": 42,
+  "score": 8,
+  "comment": "Призовое место на региональном уровне"
+}
 ```
-GET /admin/reports
-```
 
-Параметры фильтрации (все необязательны):
+`score` от 0 до 10. Автоматически: `currency = score × 10`, `credits = score / 2.5`. Активность переходит в статус `approved`.
+
+### Лента активностей — group_admin, super_admin
+
+`GET /admin/activities`
+
+`group_admin` видит только свою группу. `super_admin` может добавить `?group_id=`.
 
 | Параметр | Описание |
 |---|---|
-| `user_id` | Конкретный студент |
-| `group_id` | Группа |
-| `course_id` | Курс |
-| `stream` | Поток |
-| `format=csv` | Выгрузка в CSV вместо JSON |
+| `status` | фильтр по статусу (`submitted`, `approved`, ...) |
+| `student_id` | конкретный студент |
+| `category` | вид активности |
+| `limit` | записей на страницу (макс. 100, по умолчанию 50) |
+| `offset` | смещение |
 
-### Группы (admin)
+### Отчёты — group_admin, super_admin
 
-```
-GET  /admin/groups                Список групп
-POST /admin/groups                Создать группу (name, stream, course_year)
-POST /admin/groups/assign         Добавить студента в группу (user_id, group_id)
-POST /admin/groups/remove         Убрать студента из группы (user_id, group_id)
-```
+`GET /admin/reports`
 
-### Курсы (admin)
+`group_admin` — только своя группа. `super_admin` — фильтры `group_id`, `user_id`, `course_id`, `stream`. Добавить `?format=csv` для выгрузки файла.
 
-```
-GET  /admin/courses               Список курсов
-POST /admin/courses               Создать курс (name)
-POST /admin/courses/assign        Записать студента на курс (user_id, course_id)
-```
+### Группы и курсы — super_admin
+
+| Метод | Путь | Тело |
+|---|---|---|
+| GET | `/admin/groups` | — |
+| POST | `/admin/groups` | `{ name, stream, course_year }` |
+| POST | `/admin/groups/assign` | `{ user_id, group_id }` |
+| POST | `/admin/groups/remove` | `{ user_id, group_id }` |
+| GET | `/admin/courses` | — |
+| POST | `/admin/courses` | `{ name }` |
+| POST | `/admin/courses/assign` | `{ user_id, course_id }` |
 
 ## Структура проекта
 
 ```
-cmd/server/          — точка входа
+cmd/server/           точка входа
 internal/
   handlers/
-    handler.go       — Handler, конструктор, вспомогательные функции
-    middleware.go    — Auth, AuthTeacher, AuthAdmin, parseJWT
-    auth.go          — SignUp, Login, Refresh, Logout
-    me.go            — Me, MyBalance, MyTransactions, MyEvaluations
-    activities.go    — CRUD активностей
-    files.go         — загрузка и скачивание файлов
-    evaluate.go      — Evaluate
-    admin.go         — отчёты, группы, курсы
-  server/            — регистрация маршрутов
-  store/             — запросы к БД
-  domain/            — модели данных
-  db/                — пул соединений
-  policy/            — расчёт вознаграждения
-migrations/          — SQL-миграции (применять по порядку 001..006)
+    handler.go        Handler, конструктор, константы
+    middleware.go     Auth / AuthGroupAdmin / AuthSuperAdmin, JIT-провизионинг
+    me.go             Me, MyBalance, MyTransactions, MyEvaluations
+    activities.go     CRUD активностей
+    files.go          загрузка и скачивание PDF
+    evaluate.go       Evaluate
+    admin.go          лента, отчёты, группы, курсы
+  server/             маршруты и инициализация зависимостей
+  jwks/               верификация токенов Keycloak через JWKS
+  s3/                 клиент MinIO
+  store/              запросы к БД
+  domain/             модели данных
+  db/                 пул соединений
+  policy/             расчёт currency и credits из score
+migrations/           SQL-миграции 001–008
 ```

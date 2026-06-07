@@ -4,10 +4,25 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+// ObjectMeta holds metadata returned by Download.
+type ObjectMeta struct {
+	ContentType  string
+	Size         int64
+	LastModified time.Time
+}
+
+// Storage is the interface handlers use to interact with object storage.
+type Storage interface {
+	Upload(ctx context.Context, key, contentType string, r io.Reader, size int64) error
+	Download(ctx context.Context, key string) (io.ReadCloser, ObjectMeta, error)
+	Delete(ctx context.Context, key string) error
+}
 
 type Client struct {
 	mc     *minio.Client
@@ -25,7 +40,7 @@ func New(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Client, e
 	return &Client{mc: mc, bucket: bucket}, nil
 }
 
-// EnsureBucket создаёт бакет, если он ещё не существует.
+// EnsureBucket creates the bucket if it does not already exist.
 func (c *Client) EnsureBucket(ctx context.Context) error {
 	exists, err := c.mc.BucketExists(ctx, c.bucket)
 	if err != nil {
@@ -46,17 +61,21 @@ func (c *Client) Upload(ctx context.Context, key, contentType string, r io.Reade
 	return err
 }
 
-func (c *Client) Download(ctx context.Context, key string) (io.ReadCloser, *minio.ObjectInfo, error) {
+func (c *Client) Download(ctx context.Context, key string) (io.ReadCloser, ObjectMeta, error) {
 	obj, err := c.mc.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, nil, err
+		return nil, ObjectMeta{}, err
 	}
 	info, err := obj.Stat()
 	if err != nil {
 		obj.Close()
-		return nil, nil, err
+		return nil, ObjectMeta{}, err
 	}
-	return obj, &info, nil
+	return obj, ObjectMeta{
+		ContentType:  info.ContentType,
+		Size:         info.Size,
+		LastModified: info.LastModified,
+	}, nil
 }
 
 func (c *Client) Delete(ctx context.Context, key string) error {
