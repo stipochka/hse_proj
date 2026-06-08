@@ -25,8 +25,8 @@ const parseJWT = (token: string): Record<string, any> => {
 
 export const initKeycloak = async (): Promise<User | null> => {
   const keycloak = new Keycloak({
-    url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8080/auth',
-    realm: import.meta.env.VITE_KEYCLOAK_REALM || 'master',
+    url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180',
+    realm: import.meta.env.VITE_KEYCLOAK_REALM || 'edu',
     clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'admin-frontend',
   })
 
