@@ -34,6 +34,8 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+      MINIO_SERVER_URL: http://localhost:9000
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -62,6 +64,7 @@ services:
       - S3_SECRET_KEY=minioadmin
       - S3_BUCKET=edu-files
       - S3_USE_SSL=false
+      - S3_PUBLIC_URL=http://localhost:9000
     ports:
       - "8080:8080"
 

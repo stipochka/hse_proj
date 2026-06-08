@@ -75,7 +75,8 @@ func newS3Client(ctx context.Context) (*s3.Client, error) {
 	if v := os.Getenv("S3_USE_SSL"); v != "" {
 		useSSL, _ = strconv.ParseBool(v)
 	}
-	c, err := s3.New(endpoint, accessKey, secretKey, bucket, useSSL)
+	publicURL := os.Getenv("S3_PUBLIC_URL")
+	c, err := s3.New(endpoint, accessKey, secretKey, bucket, useSSL, publicURL)
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,10 @@ func main() {
 	}
 	defer pool.Close()
 
+	if err := db.Migrate(ctx, pool); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+
 	srv, err := server.New(ctx, pool)
 	if err != nil {
 		log.Fatalf("server init: %v", err)

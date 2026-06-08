@@ -5,12 +5,14 @@ import ActivitiesPage from '@/pages/activities/ui/ActivitiesPage'
 import ActivityEvaluationPage from '@/pages/activity-evaluation/ui/ActivityEvaluationPage'
 import GroupStudentsPage from '@/pages/group-students/ui/GroupStudentsPage'
 import ExportPage from '@/pages/export/ui/ExportPage'
+import SubmitActivityPage from '@/pages/submit-activity/ui/SubmitActivityPage'
 
 function App() {
   return (
     <MainLayout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/submit" element={<SubmitActivityPage />} />
         <Route path="/activities" element={<ActivitiesPage />} />
         <Route path="/activities/:id/evaluate" element={<ActivityEvaluationPage />} />
         <Route path="/group-students" element={<GroupStudentsPage />} />

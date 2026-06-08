@@ -18,8 +18,6 @@ type ObjectMeta struct {
 }
 
 // Storage is the interface handlers use to interact with object storage.
-// PDF bytes never flow through the backend: the frontend uploads/downloads
-// directly to S3 via the presigned URLs we hand out.
 type Storage interface {
 	PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
 	PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error)
@@ -28,19 +26,45 @@ type Storage interface {
 }
 
 type Client struct {
-	mc     *minio.Client
-	bucket string
+	mc       *minio.Client // internal: Stat, Delete, EnsureBucket
+	mcSign   *minio.Client // public-facing: presign only (signed with browser-reachable host)
+	bucket   string
 }
 
-func New(endpoint, accessKey, secretKey, bucket string, useSSL bool) (*Client, error) {
-	mc, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: useSSL,
-	})
+// New creates a MinIO client.
+// endpoint     — internal Docker address (e.g. "minio:9000"), used for all API ops.
+// publicURL    — browser-reachable address (e.g. "http://localhost:9000"), used only
+//
+//	for presigning so the resulting URL can be reached by the browser.
+//	If empty, the same endpoint is used for presigning.
+func New(endpoint, accessKey, secretKey, bucket string, useSSL bool, publicURL string) (*Client, error) {
+	creds := credentials.NewStaticV4(accessKey, secretKey, "")
+
+	// Region must be set so PresignedXxx skips the getBucketLocation network call.
+	// MinIO defaults to us-east-1; the credential string in the URL confirms this.
+	const region = "us-east-1"
+
+	mc, err := minio.New(endpoint, &minio.Options{Creds: creds, Secure: useSSL, Region: region})
 	if err != nil {
 		return nil, fmt.Errorf("minio client: %w", err)
 	}
-	return &Client{mc: mc, bucket: bucket}, nil
+
+	mcSign := mc // default: same client for presigning
+	if publicURL != "" {
+		u, err := url.Parse(publicURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse S3_PUBLIC_URL: %w", err)
+		}
+		publicSecure := u.Scheme == "https"
+		// mcSign uses the public host so presigned URLs are browser-reachable.
+		// Region is pre-set to avoid any network call from within Docker.
+		mcSign, err = minio.New(u.Host, &minio.Options{Creds: creds, Secure: publicSecure, Region: region})
+		if err != nil {
+			return nil, fmt.Errorf("minio public client: %w", err)
+		}
+	}
+
+	return &Client{mc: mc, mcSign: mcSign, bucket: bucket}, nil
 }
 
 // EnsureBucket creates the bucket if it does not already exist.
@@ -57,25 +81,25 @@ func (c *Client) EnsureBucket(ctx context.Context) error {
 	return nil
 }
 
-// PresignPut returns a temporary URL the client uses to PUT the object directly.
+// PresignPut returns a presigned PUT URL signed for the public host.
 func (c *Client) PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error) {
-	u, err := c.mc.PresignedPutObject(ctx, c.bucket, key, expiry)
+	u, err := c.mcSign.PresignedPutObject(ctx, c.bucket, key, expiry)
 	if err != nil {
 		return "", err
 	}
 	return u.String(), nil
 }
 
-// PresignGet returns a temporary URL the client uses to GET the object directly.
+// PresignGet returns a presigned GET URL signed for the public host.
 func (c *Client) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	u, err := c.mc.PresignedGetObject(ctx, c.bucket, key, expiry, url.Values{})
+	u, err := c.mcSign.PresignedGetObject(ctx, c.bucket, key, expiry, url.Values{})
 	if err != nil {
 		return "", err
 	}
 	return u.String(), nil
 }
 
-// Stat performs a HEAD to confirm the object exists and read its size/type.
+// Stat performs a HEAD to confirm the object exists.
 func (c *Client) Stat(ctx context.Context, key string) (ObjectMeta, error) {
 	info, err := c.mc.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
 	if err != nil {

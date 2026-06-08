@@ -14,18 +14,45 @@ interface MainLayoutProps {
   children: React.ReactNode
 }
 
+const isAdmin = (roles: string[]) =>
+  roles.includes('group_admin') || roles.includes('super_admin')
+
 const MainLayout = ({ children }: MainLayoutProps) => {
   const [collapsed, setCollapsed] = useState(false)
   const location = useLocation()
   const user = useAuthStore((state) => state.user)
   const logoutUser = useAuthStore((state) => state.logout)
+  const admin = isAdmin(user?.roles ?? [])
 
   const handleLogout = () => {
     logoutUser()
     keycloakLogout()
   }
 
-  const menuItems = [
+  const studentItems = [
+    {
+      key: '/',
+      label: <Link to="/">Дашборд</Link>,
+      icon: <span>📊</span>,
+    },
+    {
+      key: '/submit',
+      label: <Link to="/submit">Подать активность</Link>,
+      icon: <span>📤</span>,
+    },
+    {
+      key: '/activities',
+      label: <Link to="/activities">Мои активности</Link>,
+      icon: <span>📋</span>,
+    },
+    {
+      key: '/export',
+      label: <Link to="/export">Экспорт</Link>,
+      icon: <span>📥</span>,
+    },
+  ]
+
+  const adminItems = [
     {
       key: '/',
       label: <Link to="/">Дашборд</Link>,
@@ -48,6 +75,8 @@ const MainLayout = ({ children }: MainLayoutProps) => {
     },
   ]
 
+  const menuItems = admin ? adminItems : studentItems
+
   const userMenuItems: UserMenuItems = user ? [
     {
       key: 'profile',
@@ -69,7 +98,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider trigger={null} collapsible collapsed={collapsed} theme="dark">
         <div className="logo p-4 text-white text-lg font-bold text-center">
-          {!collapsed && 'HSE Admin'}
+          {!collapsed && 'HSE Активности'}
         </div>
         <Menu
           theme="dark"

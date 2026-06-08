@@ -57,10 +57,12 @@ const ActivitiesPage = () => {
   }
 
   const handleViewFile = async (activity: Activity) => {
+    const win = window.open('', '_blank') // открываем окно синхронно — иначе браузер блокирует
     try {
       const fileUrlData = await activitiesAPI.getFileUrl(activity.id)
-      window.open(fileUrlData.file_url, '_blank')
+      if (win) win.location.href = fileUrlData.file_url
     } catch (error) {
+      win?.close()
       console.error('Failed to get file URL:', error)
     }
   }
