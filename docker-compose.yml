@@ -65,6 +65,22 @@ services:
     ports:
       - "8080:8080"
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - app
+    environment:
+      - VITE_API_BASE_URL=http://app:8080/api
+      - VITE_KEYCLOAK_URL=http://keycloak:8080
+      - VITE_KEYCLOAK_REALM=edu
+      - VITE_KEYCLOAK_CLIENT_ID=admin-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src:ro
+
 volumes:
   postgres_data:
   minio_data:
