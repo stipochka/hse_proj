@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+	_ "edu-platform/docs" // generated swagger docs
 	"edu-platform/internal/handlers"
 	"edu-platform/internal/jwks"
 	"edu-platform/internal/s3"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func New(ctx context.Context, pool *pgxpool.Pool) (http.Handler, error) {
@@ -21,52 +23,37 @@ func New(ctx context.Context, pool *pgxpool.Pool) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("s3 init: %w", err)
 	}
-
 	jw, err := newJWKSClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("jwks init: %w", err)
 	}
-
-	st := store.New(pool)
-	return NewRouter(handlers.New(st, s3c, jw)), nil
+	return NewRouter(handlers.New(store.New(pool), s3c, jw)), nil
 }
 
-// NewRouter wires all routes to the given handler and returns the chi router.
-// Exported so integration tests can build a server without env-var dependencies.
+// NewRouter wires all routes. Exported so integration tests can build a server
+// without env-var dependencies.
 func NewRouter(h *handlers.Handler) http.Handler {
 	r := chi.NewRouter()
 
-	// Student: own profile & stats
-	r.Get("/me", h.Auth(h.Me))
-	r.Get("/me/balance", h.Auth(h.MyBalance))
-	r.Get("/me/transactions", h.Auth(h.MyTransactions))
-	r.Get("/me/evaluations", h.Auth(h.MyEvaluations))
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	r.Get("/swagger/*", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
 
-	// Student: activities
-	r.Post("/activities", h.Auth(h.CreateActivity))
-	r.Get("/activities", h.Auth(h.ListMyActivities))
+	// ── student ──────────────────────────────────────────────────────────────
+	r.Post("/activities/upload-url", h.Auth(h.UploadURL))
+	r.Post("/activities/{id}/confirm", h.Auth(h.Confirm))
+	r.Get("/activities/my", h.Auth(h.ListMyActivities))
+	r.Get("/dashboard/me", h.Auth(h.DashboardMe))
+	r.Get("/export/me", h.Auth(h.ExportMe))
+
+	// ── shared (student owner OR admin of the group) ───────────────────────────
 	r.Get("/activities/{id}", h.Auth(h.GetActivity))
-	r.Delete("/activities/{id}", h.Auth(h.DeleteActivity))
+	r.Get("/activities/{id}/file", h.Auth(h.GetActivityFile))
 
-	// Files (PDF only)
-	r.Post("/files", h.Auth(h.UploadFile))
-	r.Get("/files/{id}", h.Auth(h.DownloadFile))
-
-	// group_admin + super_admin: evaluate & activity feed
-	r.Get("/admin/activities", h.AuthGroupAdmin(h.ListAdminActivities))
-	r.Post("/evaluate", h.AuthGroupAdmin(h.Evaluate))
-
-	// group_admin + super_admin: reports
-	r.Get("/admin/reports", h.AuthGroupAdmin(h.AdminReports))
-
-	// super_admin only: groups & courses management
-	r.Get("/admin/groups", h.AuthSuperAdmin(h.ListGroups))
-	r.Post("/admin/groups", h.AuthSuperAdmin(h.CreateGroup))
-	r.Post("/admin/groups/assign", h.AuthSuperAdmin(h.AssignUserToGroup))
-	r.Post("/admin/groups/remove", h.AuthSuperAdmin(h.RemoveUserFromGroup))
-	r.Get("/admin/courses", h.AuthSuperAdmin(h.ListCourses))
-	r.Post("/admin/courses", h.AuthSuperAdmin(h.CreateCourse))
-	r.Post("/admin/courses/assign", h.AuthSuperAdmin(h.AssignUserToCourse))
+	// ── admin (group_admin + super_admin) ──────────────────────────────────────
+	r.Get("/activities", h.AuthAdmin(h.ListActivities))
+	r.Post("/activities/{id}/evaluation", h.AuthAdmin(h.Evaluate))
+	r.Get("/dashboard/summary", h.AuthAdmin(h.Summary))
+	r.Get("/export/summary", h.AuthAdmin(h.ExportSummary))
 
 	return r
 }
@@ -80,30 +67,24 @@ func newJWKSClient(ctx context.Context) (*jwks.Client, error) {
 }
 
 func newS3Client(ctx context.Context) (*s3.Client, error) {
-	endpoint := os.Getenv("S3_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "minio:9000"
-	}
-	accessKey := os.Getenv("S3_ACCESS_KEY")
-	if accessKey == "" {
-		accessKey = "minioadmin"
-	}
-	secretKey := os.Getenv("S3_SECRET_KEY")
-	if secretKey == "" {
-		secretKey = "minioadmin"
-	}
-	bucket := os.Getenv("S3_BUCKET")
-	if bucket == "" {
-		bucket = "edu-files"
-	}
+	endpoint := envOr("S3_ENDPOINT", "minio:9000")
+	accessKey := envOr("S3_ACCESS_KEY", "minioadmin")
+	secretKey := envOr("S3_SECRET_KEY", "minioadmin")
+	bucket := envOr("S3_BUCKET", "edu-files")
 	useSSL := false
 	if v := os.Getenv("S3_USE_SSL"); v != "" {
 		useSSL, _ = strconv.ParseBool(v)
 	}
-
 	c, err := s3.New(endpoint, accessKey, secretKey, bucket, useSSL)
 	if err != nil {
 		return nil, err
 	}
 	return c, c.EnsureBucket(ctx)
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

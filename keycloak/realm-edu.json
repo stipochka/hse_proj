@@ -1,0 +1,92 @@
+{
+  "realm": "edu",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "student", "description": "Студент: загружает активности, видит свой дашборд" },
+      { "name": "group_admin", "description": "Куратор группы: проверяет активности, начисляет баллы" },
+      { "name": "super_admin", "description": "Root: видит все группы, управляет структурой в Keycloak" }
+    ]
+  },
+  "groups": [
+    { "name": "BSE-2024", "path": "/BSE-2024" },
+    { "name": "BSE-2023", "path": "/BSE-2023" }
+  ],
+  "clients": [
+    {
+      "clientId": "edu-frontend",
+      "name": "Edu Platform Frontend (SPA)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "claim.name": "groups",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "student1",
+      "email": "student1@edu.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ivan",
+      "lastName": "Student",
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["student"],
+      "groups": ["/BSE-2024"]
+    },
+    {
+      "username": "student2",
+      "email": "student2@edu.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Petr",
+      "lastName": "Student",
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["student"],
+      "groups": ["/BSE-2023"]
+    },
+    {
+      "username": "admin1",
+      "email": "admin1@edu.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Olga",
+      "lastName": "Curator",
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["group_admin"],
+      "groups": ["/BSE-2024"]
+    },
+    {
+      "username": "root",
+      "email": "root@edu.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Root",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "password", "temporary": false }],
+      "realmRoles": ["super_admin"]
+    }
+  ]
+}

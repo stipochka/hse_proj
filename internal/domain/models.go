@@ -2,72 +2,55 @@ package domain
 
 import "time"
 
-type User struct {
-	ID        int64     `json:"id"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"`
-	Role      string    `json:"role"` // "student", "teacher", "admin"
-	CreatedAt time.Time `json:"created_at"`
-}
+// Activity statuses (minimal lifecycle from the design doc).
+const (
+	StatusPending   = "PENDING"   // created, awaiting file upload
+	StatusSubmitted = "SUBMITTED" // file uploaded & confirmed, ready for review
+	StatusEvaluated = "EVALUATED" // points awarded
+	StatusRejected  = "REJECTED"  // rejected with a comment
+)
 
+// Activity is a student-submitted achievement. Author and group come from the
+// Keycloak token; the group is snapshotted at submission time for reporting.
 type Activity struct {
-	ID           int64      `json:"id"`
-	UserID       int64      `json:"user_id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	Category     string     `json:"category"`
-	Status       string     `json:"status"` // draft, submitted, under_review, approved, rejected
-	ActivityDate *time.Time `json:"activity_date,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	Files        []ActivityFile `json:"files,omitempty"`
+	ID           int64       `json:"id"`
+	StudentID    string      `json:"student_id"`    // Keycloak sub
+	StudentGroup string      `json:"student_group"` // snapshot
+	Title        string      `json:"title"`
+	Category     string      `json:"category"`
+	Description  string      `json:"description"`
+	PDFKey       string      `json:"-"` // internal S3 key, never exposed
+	Status       string      `json:"status"`
+	CreatedAt    time.Time   `json:"created_at"`
+	Evaluation   *Evaluation `json:"evaluation,omitempty"`
 }
 
-type ActivityFile struct {
-	ID         int64     `json:"id"`
-	ActivityID int64     `json:"activity_id"`
-	Filename   string    `json:"filename"`
-	S3Key      string    `json:"-"`
-	SizeBytes  int64     `json:"size_bytes"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
+// Evaluation is an admin's assessment of an activity.
 type Evaluation struct {
 	ID          int64     `json:"id"`
 	ActivityID  int64     `json:"activity_id"`
-	EvaluatorID int64     `json:"evaluator_id"`
-	Score       int       `json:"score"`
-	Currency    int64     `json:"currency"`
+	AdminID     string    `json:"admin_id"` // Keycloak sub of the evaluator
+	Points      int       `json:"points"`
 	Credits     float64   `json:"credits"`
 	Comment     string    `json:"comment"`
-	CreatedAt   time.Time `json:"created_at"`
+	EvaluatedAt time.Time `json:"evaluated_at"`
 }
 
-type Transaction struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Amount    int64     `json:"amount"`
-	Reason    string    `json:"reason"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type Course struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-type Group struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	Stream     string `json:"stream"`
-	CourseYear int    `json:"course_year"`
-}
-
-// StudentStats is the aggregate row returned by the admin report query.
+// StudentStats is one aggregate row of the admin summary, keyed by Keycloak id.
 type StudentStats struct {
-	UserID        int64   `json:"user_id"`
-	Email         string  `json:"email"`
-	GroupName     string  `json:"group_name"`
-	TotalCurrency int64   `json:"total_currency"`
-	TotalCredits  float64 `json:"total_credits"`
-	ActivityCount int     `json:"activity_count"`
+	StudentID      string  `json:"student_id"`
+	StudentGroup   string  `json:"student_group"`
+	TotalPoints    int64   `json:"total_points"`
+	TotalCredits   float64 `json:"total_credits"`
+	ActivityCount  int     `json:"activity_count"`
+	EvaluatedCount int     `json:"evaluated_count"`
+}
+
+// DashboardMe is the personal aggregate for a student dashboard.
+type DashboardMe struct {
+	TotalPoints   int64          `json:"total_points"`
+	TotalCredits  float64        `json:"total_credits"`
+	ActivityCount int            `json:"activity_count"`
+	ByStatus      map[string]int `json:"by_status"`
+	ByCategory    map[string]int `json:"by_category"`
 }

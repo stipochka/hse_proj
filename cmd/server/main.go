@@ -11,6 +11,14 @@ import (
 	"edu-platform/internal/server"
 )
 
+// @title           Edu Platform API
+// @version         1.0
+// @description     Учёт студенческих активностей. Аутентификация — через Keycloak (Bearer JWT); пользователи/группы живут в Keycloak, не в этом сервисе.
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in              header
+// @name            Authorization
+// @description     Введите "Bearer {token}", где token — access token из Keycloak.
 func main() {
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")

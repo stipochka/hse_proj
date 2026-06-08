@@ -8,75 +8,72 @@ import (
 	"edu-platform/internal/policy"
 )
 
+type evaluationRequest struct {
+	Points  int      `json:"points"`
+	Credits *float64 `json:"credits"` // optional; defaults from points
+	Comment string   `json:"comment"`
+	Reject  bool     `json:"reject"`
+}
+
+// Evaluate godoc
+// @Summary  Evaluate or reject an activity
+// @Description Awards points/credits (status EVALUATED) or rejects with a comment (status REJECTED). group_admin is restricted to their own group.
+// @Tags     evaluation
+// @Security BearerAuth
+// @Accept   json
+// @Produce  json
+// @Param    id   path int               true "Activity id"
+// @Param    body body evaluationRequest true "Evaluation"
+// @Success  201 {object} domain.Evaluation
+// @Failure  400 {object} errorResponse
+// @Failure  403 {object} errorResponse
+// @Failure  404 {object} errorResponse
+// @Router   /activities/{id}/evaluation [post]
 func (h *Handler) Evaluate(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ActivityID int64  `json:"activity_id"`
-		StudentID  int64  `json:"student_id"`
-		Score      *int   `json:"score"`
-		Currency   int64  `json:"currency"`
-		Comment    string `json:"comment"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
-
-	if in.ActivityID == 0 || in.StudentID == 0 {
-		http.Error(w, "activity_id and student_id required", http.StatusBadRequest)
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
-	if in.Score == nil {
-		http.Error(w, "score is required", http.StatusBadRequest)
-		return
-	}
-	score := *in.Score
-	if score < 0 || score > 10 {
-		http.Error(w, "score must be between 0 and 10", http.StatusBadRequest)
+	var in evaluationRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
-	role := r.Context().Value(ctxRoleKey{}).(string)
-	groupID := r.Context().Value(ctxGroupIDKey{}).(int64)
-
-	// group_admin may only evaluate students who belong to their own group.
-	if role == "group_admin" {
-		ok, err := h.st.IsUserInGroup(r.Context(), in.StudentID, groupID)
-		if err != nil {
-			http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if !ok {
-			http.Error(w, "student does not belong to your group", http.StatusForbidden)
-			return
-		}
-	}
-
-	evaluatorID := r.Context().Value(ctxUserKey{}).(int64)
-
-	currency := in.Currency
-	credits := 0.0
-	if currency == 0 {
-		currency, credits = policy.ComputeReward(score)
-	}
-
-	ev := domain.Evaluation{
-		ActivityID:  in.ActivityID,
-		EvaluatorID: evaluatorID,
-		Score:       score,
-		Currency:    currency,
-		Credits:     credits,
-		Comment:     in.Comment,
-	}
-	id, err := h.st.CreateEvaluation(r.Context(), ev)
+	a, err := h.st.GetActivity(r.Context(), id)
 	if err != nil {
-		http.Error(w, "create evaluation: "+err.Error(), http.StatusInternalServerError)
+		writeErr(w, http.StatusNotFound, "activity not found")
+		return
+	}
+	// group_admin may only evaluate activities of their own group.
+	if role(r) == "group_admin" && a.StudentGroup != group(r) {
+		writeErr(w, http.StatusForbidden, "activity belongs to another group")
 		return
 	}
 
-	_ = h.st.UpdateActivityStatus(r.Context(), in.ActivityID, "approved")
+	status := domain.StatusEvaluated
+	ev := domain.Evaluation{ActivityID: id, AdminID: sub(r), Comment: in.Comment}
 
-	if currency != 0 {
-		t := domain.Transaction{UserID: in.StudentID, Amount: currency, Reason: "evaluation reward"}
-		_, _ = h.st.AddTransaction(r.Context(), t)
+	if in.Reject {
+		status = domain.StatusRejected
+	} else {
+		if in.Points < 0 || in.Points > policy.MaxPoints {
+			writeErr(w, http.StatusBadRequest, "points must be between 0 and 10")
+			return
+		}
+		ev.Points = in.Points
+		if in.Credits != nil {
+			ev.Credits = *in.Credits
+		} else {
+			ev.Credits = policy.CreditsForPoints(in.Points)
+		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{"evaluation_id": id})
+
+	evID, err := h.st.UpsertEvaluation(r.Context(), ev, status)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "save evaluation: "+err.Error())
+		return
+	}
+	ev.ID = evID
+	writeJSON(w, http.StatusCreated, ev)
 }

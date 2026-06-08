@@ -1,114 +1,44 @@
 package handlers
 
-import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
+import "net/http"
 
-	"edu-platform/internal/domain"
-
-	"github.com/go-chi/chi/v5"
-)
-
-func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
-	uid := r.Context().Value(ctxUserKey{}).(int64)
-
-	activityIDStr := r.FormValue("activity_id")
-	if activityIDStr == "" {
-		http.Error(w, "activity_id required", http.StatusBadRequest)
-		return
-	}
-	activityID, err := strconv.ParseInt(activityIDStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid activity_id", http.StatusBadRequest)
-		return
-	}
-
-	act, err := h.st.GetActivity(r.Context(), activityID)
-	if err != nil || act.UserID != uid {
-		http.Error(w, "activity not found or forbidden", http.StatusForbidden)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		http.Error(w, "file too large (max 20 MB)", http.StatusRequestEntityTooLarge)
-		return
-	}
-
-	f, fh, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "file required", http.StatusBadRequest)
-		return
-	}
-	defer f.Close()
-
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	if !allowedExts[ext] {
-		http.Error(w, "only PDF files are allowed", http.StatusBadRequest)
-		return
-	}
-
-	s3Key := fmt.Sprintf("activities/%d/%d_%s%s", activityID, time.Now().UnixNano(), randomHex(8), ext)
-	if err := h.s3c.Upload(r.Context(), s3Key, "application/pdf", f, fh.Size); err != nil {
-		http.Error(w, "upload error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	fileRec := domain.ActivityFile{
-		ActivityID: activityID,
-		Filename:   filepath.Base(fh.Filename),
-		S3Key:      s3Key,
-		SizeBytes:  fh.Size,
-	}
-	fileID, err := h.st.CreateActivityFile(r.Context(), fileRec)
-	if err != nil {
-		_ = h.s3c.Delete(r.Context(), s3Key)
-		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{"file_id": fileID, "filename": fh.Filename})
+type fileURLResponse struct {
+	FileURL string `json:"file_url"`
 }
 
-func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
-	uid := r.Context().Value(ctxUserKey{}).(int64)
-	role := r.Context().Value(ctxRoleKey{}).(string)
-
-	fileID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+// GetActivityFile godoc
+// @Summary  Get a presigned URL to view/download the activity PDF
+// @Description Returns a short-lived presigned GET URL. The browser fetches the PDF directly from S3.
+// @Tags     activities
+// @Security BearerAuth
+// @Produce  json
+// @Param    id path int true "Activity id"
+// @Success  200 {object} fileURLResponse
+// @Failure  403 {object} errorResponse
+// @Failure  404 {object} errorResponse
+// @Router   /activities/{id}/file [get]
+func (h *Handler) GetActivityFile(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
 		return
 	}
-	f, err := h.st.GetActivityFile(r.Context(), fileID)
+	a, err := h.st.GetActivity(r.Context(), id)
 	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-
-	if role == "student" {
-		act, err := h.st.GetActivity(r.Context(), f.ActivityID)
-		if err != nil || act.UserID != uid {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-	}
-
-	obj, meta, err := h.s3c.Download(r.Context(), f.S3Key)
-	if err != nil {
-		http.Error(w, "download error: "+err.Error(), http.StatusInternalServerError)
+	if !canAccessActivity(r, a) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	defer obj.Close()
-
-	w.Header().Set("Content-Disposition", `attachment; filename="`+f.Filename+`"`)
-	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
-	io.Copy(w, obj)
+	if a.PDFKey == "" {
+		writeErr(w, http.StatusNotFound, "no file for this activity")
+		return
+	}
+	url, err := h.s3c.PresignGet(r.Context(), a.PDFKey, presignTTL)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "presign: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, fileURLResponse{FileURL: url})
 }

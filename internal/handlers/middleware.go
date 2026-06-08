@@ -2,91 +2,99 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"strconv"
+	"strings"
 )
 
-type ctxUserKey struct{}
+type ctxSubKey struct{}
 type ctxRoleKey struct{}
-type ctxGroupIDKey struct{}
+type ctxGroupKey struct{}
 type ctxEmailKey struct{}
 
-// rolePriority defines which role wins when a user has multiple roles assigned.
+// rolePriority decides which role wins when the token carries several.
 var rolePriority = map[string]int{"student": 0, "group_admin": 1, "super_admin": 2}
 
-// extractClaims parses the Bearer token, extracts user identity from Keycloak claims,
-// and upserts the user record in the database (JIT provisioning).
-func (h *Handler) extractClaims(r *http.Request) (userID int64, role string, groupID int64, email string, err error) {
-	ah := r.Header.Get("Authorization")
-	if len(ah) <= 7 || ah[:7] != "Bearer " {
-		return 0, "", 0, "", fmt.Errorf("missing or malformed Authorization header")
-	}
+// identity is everything we need about the caller, derived purely from the JWT.
+// Nothing about users/groups is stored in our DB — Keycloak is the source of truth.
+type identity struct {
+	sub   string // Keycloak user id
+	email string
+	role  string
+	group string // student's / curator's Keycloak group (first of the `groups` claim)
+}
 
+func (h *Handler) authenticate(r *http.Request) (identity, error) {
+	var id identity
+	ah := r.Header.Get("Authorization")
+	if len(ah) <= 7 || !strings.EqualFold(ah[:7], "Bearer ") {
+		return id, errUnauthorized("missing or malformed Authorization header")
+	}
 	claims, err := h.jwks.Parse(ah[7:])
 	if err != nil {
-		return 0, "", 0, "", err
+		return id, errUnauthorized(err.Error())
 	}
 
-	sub, _ := claims["sub"].(string)
-	if sub == "" {
-		return 0, "", 0, "", fmt.Errorf("missing sub claim")
+	id.sub, _ = claims["sub"].(string)
+	if id.sub == "" {
+		return id, errUnauthorized("missing sub claim")
 	}
+	id.email, _ = claims["email"].(string)
 
-	email, _ = claims["email"].(string)
-
-	// Pick the highest-priority role from realm_access.roles.
-	role = "student"
+	// Highest-priority realm role.
+	id.role = "student"
 	if ra, ok := claims["realm_access"].(map[string]any); ok {
 		if roles, ok := ra["roles"].([]any); ok {
 			for _, rv := range roles {
 				if rs, ok := rv.(string); ok {
-					if p, known := rolePriority[rs]; known && p > rolePriority[role] {
-						role = rs
+					if rolePriority[rs] > rolePriority[id.role] {
+						id.role = rs
 					}
 				}
 			}
 		}
 	}
 
-	// group_id is a custom Keycloak user attribute mapped into the JWT for group_admin users.
-	if gv, ok := claims["group_id"].(string); ok && gv != "" {
-		groupID, _ = strconv.ParseInt(gv, 10, 64)
+	// Group from the Keycloak `groups` membership claim (first entry, path stripped).
+	if gs, ok := claims["groups"].([]any); ok {
+		for _, gv := range gs {
+			if g, ok := gv.(string); ok && g != "" {
+				id.group = strings.TrimPrefix(g, "/")
+				break
+			}
+		}
 	}
-
-	userID, err = h.st.GetOrCreateUser(r.Context(), sub, email, role)
-	if err != nil {
-		return 0, "", 0, "", fmt.Errorf("user provision: %w", err)
-	}
-
-	return userID, role, groupID, email, nil
+	return id, nil
 }
 
-func (h *Handler) withClaims(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
-	uid, role, groupID, email, err := h.extractClaims(r)
+type authError struct{ msg string }
+
+func (e authError) Error() string      { return e.msg }
+func errUnauthorized(msg string) error { return authError{msg} }
+
+func (h *Handler) withIdentity(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	id, err := h.authenticate(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	ctx := context.WithValue(r.Context(), ctxUserKey{}, uid)
-	ctx = context.WithValue(ctx, ctxRoleKey{}, role)
-	ctx = context.WithValue(ctx, ctxGroupIDKey{}, groupID)
-	ctx = context.WithValue(ctx, ctxEmailKey{}, email)
+	ctx := context.WithValue(r.Context(), ctxSubKey{}, id.sub)
+	ctx = context.WithValue(ctx, ctxRoleKey{}, id.role)
+	ctx = context.WithValue(ctx, ctxGroupKey{}, id.group)
+	ctx = context.WithValue(ctx, ctxEmailKey{}, id.email)
 	next(w, r.WithContext(ctx))
 }
 
+// Auth allows any authenticated user.
 func (h *Handler) Auth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h.withClaims(w, r, next)
-	}
+	return func(w http.ResponseWriter, r *http.Request) { h.withIdentity(w, r, next) }
 }
 
-func (h *Handler) AuthGroupAdmin(next http.HandlerFunc) http.HandlerFunc {
+// AuthAdmin allows group_admin and super_admin only.
+func (h *Handler) AuthAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.withClaims(w, r, func(w http.ResponseWriter, r *http.Request) {
-			role := r.Context().Value(ctxRoleKey{}).(string)
-			if role != "group_admin" && role != "super_admin" {
-				http.Error(w, "group_admin role required", http.StatusForbidden)
+		h.withIdentity(w, r, func(w http.ResponseWriter, r *http.Request) {
+			if role(r) != "group_admin" && role(r) != "super_admin" {
+				writeErr(w, http.StatusForbidden, "admin role required")
 				return
 			}
 			next(w, r)
@@ -94,15 +102,6 @@ func (h *Handler) AuthGroupAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (h *Handler) AuthSuperAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h.withClaims(w, r, func(w http.ResponseWriter, r *http.Request) {
-			role := r.Context().Value(ctxRoleKey{}).(string)
-			if role != "super_admin" {
-				http.Error(w, "super_admin role required", http.StatusForbidden)
-				return
-			}
-			next(w, r)
-		})
-	}
-}
+func sub(r *http.Request) string   { v, _ := r.Context().Value(ctxSubKey{}).(string); return v }
+func role(r *http.Request) string  { v, _ := r.Context().Value(ctxRoleKey{}).(string); return v }
+func group(r *http.Request) string { v, _ := r.Context().Value(ctxGroupKey{}).(string); return v }

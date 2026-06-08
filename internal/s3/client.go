@@ -3,14 +3,14 @@ package s3
 import (
 	"context"
 	"fmt"
-	"io"
+	"net/url"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// ObjectMeta holds metadata returned by Download.
+// ObjectMeta holds metadata returned by Stat (HEAD).
 type ObjectMeta struct {
 	ContentType  string
 	Size         int64
@@ -18,9 +18,12 @@ type ObjectMeta struct {
 }
 
 // Storage is the interface handlers use to interact with object storage.
+// PDF bytes never flow through the backend: the frontend uploads/downloads
+// directly to S3 via the presigned URLs we hand out.
 type Storage interface {
-	Upload(ctx context.Context, key, contentType string, r io.Reader, size int64) error
-	Download(ctx context.Context, key string) (io.ReadCloser, ObjectMeta, error)
+	PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error)
+	PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error)
+	Stat(ctx context.Context, key string) (ObjectMeta, error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -54,24 +57,31 @@ func (c *Client) EnsureBucket(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) Upload(ctx context.Context, key, contentType string, r io.Reader, size int64) error {
-	_, err := c.mc.PutObject(ctx, c.bucket, key, r, size, minio.PutObjectOptions{
-		ContentType: contentType,
-	})
-	return err
+// PresignPut returns a temporary URL the client uses to PUT the object directly.
+func (c *Client) PresignPut(ctx context.Context, key, contentType string, expiry time.Duration) (string, error) {
+	u, err := c.mc.PresignedPutObject(ctx, c.bucket, key, expiry)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }
 
-func (c *Client) Download(ctx context.Context, key string) (io.ReadCloser, ObjectMeta, error) {
-	obj, err := c.mc.GetObject(ctx, c.bucket, key, minio.GetObjectOptions{})
+// PresignGet returns a temporary URL the client uses to GET the object directly.
+func (c *Client) PresignGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	u, err := c.mc.PresignedGetObject(ctx, c.bucket, key, expiry, url.Values{})
 	if err != nil {
-		return nil, ObjectMeta{}, err
+		return "", err
 	}
-	info, err := obj.Stat()
+	return u.String(), nil
+}
+
+// Stat performs a HEAD to confirm the object exists and read its size/type.
+func (c *Client) Stat(ctx context.Context, key string) (ObjectMeta, error) {
+	info, err := c.mc.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
 	if err != nil {
-		obj.Close()
-		return nil, ObjectMeta{}, err
+		return ObjectMeta{}, err
 	}
-	return obj, ObjectMeta{
+	return ObjectMeta{
 		ContentType:  info.ContentType,
 		Size:         info.Size,
 		LastModified: info.LastModified,
