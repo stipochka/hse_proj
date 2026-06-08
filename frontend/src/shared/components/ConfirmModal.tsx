@@ -35,12 +35,13 @@ export const ConfirmModal = ({
           {title}
         </span>
       }
-      content={content}
       okText={okText}
       cancelText={cancelText}
       onOk={handleOk}
       confirmLoading={loading}
       {...props}
-    />
+    >
+      {content && <p>{content}</p>}
+    </Modal>
   )
 }

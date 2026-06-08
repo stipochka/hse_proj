@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Table, Select, Spin, Empty, Card, Input, Space, Button, Row, Col } from 'antd'
-import { FilterOutlined, ClearOutlined } from '@ant-design/icons'
+import { Table, Select, Spin, Empty, Card, Input, Row, Col } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { dashboardAPI } from '@/shared/api/dashboard'
 import type { StudentStats } from '@/shared/types'
@@ -74,11 +73,6 @@ const GroupStudentsPage = () => {
 
   const handleSortChange = (value: string) => {
     setSortBy(value as 'id' | 'points' | 'activities')
-  }
-
-  const handleClear = () => {
-    setSearchText('')
-    setSortBy('id')
   }
 
   const columns: ColumnsType<StudentStats> = [

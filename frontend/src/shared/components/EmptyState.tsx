@@ -1,4 +1,4 @@
-import { Empty, Button, Space } from 'antd'
+import { Empty, Button } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 
 interface EmptyStateProps {
@@ -7,19 +7,16 @@ interface EmptyStateProps {
   onRetry?: () => void
 }
 
-export const EmptyState = ({ title = 'Нет данных', description, onRetry }: EmptyStateProps) => {
+export const EmptyState = ({ title = 'Нет данных', onRetry }: EmptyStateProps) => {
   return (
-    <Empty
-      description={title}
-      style={{ paddingY: '40px' }}
-      extra={
-        onRetry && (
-          <Button type="primary" onClick={onRetry} icon={<ReloadOutlined />}>
-            Попробовать снова
-          </Button>
-        )
-      }
-    />
+    <div style={{ padding: '40px 0', textAlign: 'center' }}>
+      <Empty description={title} />
+      {onRetry && (
+        <Button type="primary" onClick={onRetry} icon={<ReloadOutlined />} style={{ marginTop: 16 }}>
+          Попробовать снова
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -33,16 +30,13 @@ export const ErrorState = ({
   onRetry,
 }: ErrorStateProps) => {
   return (
-    <Empty
-      description={error}
-      style={{ paddingY: '40px' }}
-      extra={
-        onRetry && (
-          <Button type="primary" danger onClick={onRetry} icon={<ReloadOutlined />}>
-            Попробовать снова
-          </Button>
-        )
-      }
-    />
+    <div style={{ padding: '40px 0', textAlign: 'center' }}>
+      <Empty description={error} />
+      {onRetry && (
+        <Button type="primary" danger onClick={onRetry} icon={<ReloadOutlined />} style={{ marginTop: 16 }}>
+          Попробовать снова
+        </Button>
+      )}
+    </div>
   )
 }

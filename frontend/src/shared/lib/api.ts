@@ -20,13 +20,7 @@ baseInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 baseInstance.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized
-      window.location.href = '/login'
-    }
-    return Promise.reject(error)
-  },
+  (error) => Promise.reject(error),
 )
 
 export default baseInstance

@@ -12,48 +12,40 @@ export interface User {
   roles: string[]
 }
 
-const parseJWT = (token: string): Record<string, any> => {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) throw new Error('Invalid JWT')
-    const decoded = JSON.parse(atob(parts[1]))
-    return decoded
-  } catch {
-    return {}
-  }
-}
-
 export const initKeycloak = async (): Promise<User | null> => {
   const keycloak = new Keycloak({
     url: import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180',
     realm: import.meta.env.VITE_KEYCLOAK_REALM || 'edu',
-    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'admin-frontend',
+    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'edu-frontend',
   })
 
   keycloakInstance = keycloak
 
   try {
     const authenticated = await keycloak.init({
-      onLoad: 'check-sso',
-      silentCheckSsoRedirectUri: `${window.location.origin}/silent-check-sso.html`,
+      onLoad: 'login-required',
+      pkceMethod: 'S256',
+      checkLoginIframe: false, // prevents infinite redirect loop in Keycloak 24
     })
 
     if (authenticated && keycloak.token) {
       setToken(keycloak.token)
-      
-      const tokenData = parseJWT(keycloak.token)
+
+      const realmRoles: string[] =
+        (keycloak.tokenParsed?.realm_access as { roles?: string[] })?.roles || []
+
       const user: User = {
         id: keycloak.subject || '',
         username: keycloak.tokenParsed?.preferred_username || '',
         email: keycloak.tokenParsed?.email || '',
         firstName: keycloak.tokenParsed?.given_name || '',
         lastName: keycloak.tokenParsed?.family_name || '',
-        roles: keycloak.tokenParsed?.roles || [],
+        roles: realmRoles,
       }
 
       // Refresh token periodically
       setInterval(() => {
-        keycloak.refreshToken(70).catch(() => {
+        keycloak.updateToken(70).catch(() => {
           keycloak.logout()
         })
       }, 60000)

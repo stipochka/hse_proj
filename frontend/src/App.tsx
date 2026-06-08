@@ -1,7 +1,4 @@
-import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { initKeycloak } from '@/shared/lib/keycloak'
-import { useAuthStore } from '@/app/store/authStore'
 import MainLayout from '@/app/layout/MainLayout'
 import DashboardPage from '@/pages/dashboard/ui/DashboardPage'
 import ActivitiesPage from '@/pages/activities/ui/ActivitiesPage'
@@ -10,23 +7,6 @@ import GroupStudentsPage from '@/pages/group-students/ui/GroupStudentsPage'
 import ExportPage from '@/pages/export/ui/ExportPage'
 
 function App() {
-  const setUser = useAuthStore((state) => state.setUser)
-
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const user = await initKeycloak()
-        if (user) {
-          setUser(user)
-        }
-      } catch (error) {
-        console.error('Failed to initialize Keycloak:', error)
-      }
-    }
-
-    initAuth()
-  }, [setUser])
-
   return (
     <MainLayout>
       <Routes>
@@ -42,4 +22,3 @@ function App() {
 }
 
 export default App
-

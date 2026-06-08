@@ -1,10 +1,9 @@
-FROM golang:1.20-alpine AS build
-RUN apk add --no-cache git build-base
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /app/bin/server ./cmd/server
 
 FROM alpine:3.18
 RUN apk add --no-cache ca-certificates

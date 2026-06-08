@@ -6,20 +6,31 @@ import { useNavigate } from 'react-router-dom'
 import FilterBar from '@/shared/components/FilterBar'
 import { StatusTag } from '@/shared/components/StatusTag'
 import { activitiesAPI } from '@/shared/api/activities'
-import { ACTIVITY_STATUS, DEFAULT_PAGE_SIZE } from '@/shared/constants'
+import { useAuthStore } from '@/app/store/authStore'
+import { ACTIVITY_STATUS } from '@/shared/constants'
 import { formatDate } from '@/shared/lib/utils'
 import type { Activity, FilterOptions } from '@/shared/types'
 
+const isAdmin = (roles: string[]) =>
+  roles.includes('group_admin') || roles.includes('super_admin')
+
 const ActivitiesPage = () => {
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.user)
+  const admin = isAdmin(user?.roles ?? [])
+
   const [loading, setLoading] = useState(true)
   const [activities, setActivities] = useState<Activity[]>([])
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(ACTIVITY_STATUS.SUBMITTED)
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(
+    admin ? ACTIVITY_STATUS.SUBMITTED : undefined
+  )
 
   const fetchActivities = async (appliedFilters: FilterOptions = {}) => {
     setLoading(true)
     try {
-      const data = await activitiesAPI.getMyActivities(appliedFilters)
+      const data = admin
+        ? await activitiesAPI.getActivities(appliedFilters)
+        : await activitiesAPI.getMyActivities(appliedFilters)
       setActivities(data)
     } catch (error) {
       console.error('Failed to fetch activities:', error)
@@ -29,12 +40,11 @@ const ActivitiesPage = () => {
   }
 
   useEffect(() => {
-    fetchActivities({ status: statusFilter })
+    fetchActivities(admin ? { status: statusFilter } : { status: statusFilter })
   }, [])
 
   const handleFilterChange = (newFilters: FilterOptions) => {
-    const combinedFilters = { ...newFilters, status: statusFilter }
-    fetchActivities(combinedFilters)
+    fetchActivities({ ...newFilters, status: statusFilter })
   }
 
   const handleStatusFilterChange = (value: string | undefined) => {
@@ -73,6 +83,21 @@ const ActivitiesPage = () => {
       key: 'description',
       ellipsis: true,
     },
+    ...(admin
+      ? [
+          {
+            title: 'Студент',
+            dataIndex: 'student_id',
+            key: 'student_id',
+            ellipsis: true,
+          },
+          {
+            title: 'Группа',
+            dataIndex: 'student_group',
+            key: 'student_group',
+          },
+        ]
+      : []),
     {
       title: 'Категория',
       dataIndex: 'category',
@@ -104,7 +129,7 @@ const ActivitiesPage = () => {
           >
             PDF
           </Button>
-          {record.status === 'SUBMITTED' && (
+          {admin && record.status === 'SUBMITTED' && (
             <Button
               type="primary"
               size="small"
@@ -121,9 +146,11 @@ const ActivitiesPage = () => {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-6">Мои активности</h1>
+      <h1 className="text-3xl font-bold mb-6">
+        {admin ? 'Активности на проверку' : 'Мои активности'}
+      </h1>
 
-      <FilterBar onFilterChange={handleFilterChange} />
+      {admin && <FilterBar onFilterChange={handleFilterChange} />}
 
       <div className="bg-white p-4 rounded-lg shadow-sm mb-6">
         <Row gutter={[16, 16]}>
@@ -166,4 +193,3 @@ const ActivitiesPage = () => {
 }
 
 export default ActivitiesPage
-

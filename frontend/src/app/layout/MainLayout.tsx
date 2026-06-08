@@ -1,6 +1,9 @@
 import { useState } from 'react'
-import { Layout, Menu, Button, Dropdown, Space, Avatar, Alert } from 'antd'
-import { MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, UserOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { Layout, Menu, Button, Dropdown, Space, Avatar } from 'antd'
+import type { MenuProps } from 'antd'
+
+type UserMenuItems = MenuProps['items']
+import { MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/app/store/authStore'
 import { logout as keycloakLogout } from '@/shared/lib/keycloak'
@@ -45,7 +48,7 @@ const MainLayout = ({ children }: MainLayoutProps) => {
     },
   ]
 
-  const userMenuItems = user ? [
+  const userMenuItems: UserMenuItems = user ? [
     {
       key: 'profile',
       label: 'Профиль',
@@ -98,17 +101,6 @@ const MainLayout = ({ children }: MainLayoutProps) => {
           </Space>
         </Header>
         <Content className="m-6 p-6 bg-gray-50 rounded-lg min-h-[calc(100vh-113px)]">
-          {!user && (
-            <Alert
-              message="Внимание: Токен не загружен"
-              description="Вы работаете без аутентификации. Данные на API запросах могут быть недоступны."
-              type="warning"
-              icon={<InfoCircleOutlined />}
-              showIcon
-              closable
-              className="mb-6"
-            />
-          )}
           {children}
         </Content>
       </Layout>
