@@ -15,6 +15,7 @@ const (
 type Activity struct {
 	ID           int64       `json:"id"`
 	StudentID    string      `json:"student_id"`    // Keycloak sub
+	StudentName  string      `json:"student_name"`  // preferred_username snapshot
 	StudentGroup string      `json:"student_group"` // snapshot
 	Title        string      `json:"title"`
 	Category     string      `json:"category"`

@@ -1,6 +1,7 @@
 export interface Activity {
   id: number
   student_id: string
+  student_name: string
   student_group: string
   title: string
   description: string

@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { Form, Input, Button, Upload, Card, Result, Select, Steps } from 'antd'
-import { UploadOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { Form, Input, Button, Upload, Card, Result, Select, Steps, Typography, Alert } from 'antd'
+import { UploadOutlined, SendOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd'
 import { activitiesAPI } from '@/shared/api/activities'
+
+const { Title, Text } = Typography
 
 const CATEGORIES = [
   'Научная деятельность',
@@ -36,7 +38,6 @@ const SubmitActivityPage = () => {
     setError(null)
 
     try {
-      // 1. Получаем presigned URL и создаём активность
       setStep(1)
       const { activity_id, upload_url } = await activitiesAPI.getUploadUrl({
         title: values.title,
@@ -44,27 +45,23 @@ const SubmitActivityPage = () => {
         description: values.description,
       })
 
-      // 2. Загружаем PDF напрямую в S3
       setStep(2)
       const file = fileList[0].originFileObj as File
-      const uploadResp = await fetch(upload_url, {
+      const resp = await fetch(upload_url, {
         method: 'PUT',
         body: file,
         headers: { 'Content-Type': 'application/pdf' },
       })
-      if (!uploadResp.ok) {
-        throw new Error(`Ошибка загрузки файла: ${uploadResp.status}`)
-      }
+      if (!resp.ok) throw new Error(`Ошибка загрузки: ${resp.status}`)
 
-      // 3. Подтверждаем загрузку
       setStep(3)
       await activitiesAPI.confirmUpload(activity_id)
 
       setStep(4)
       form.resetFields()
       setFileList([])
-    } catch (err: any) {
-      setError(err?.message || 'Произошла ошибка при отправке')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Произошла ошибка при отправке')
       setStep(0)
     } finally {
       setSubmitting(false)
@@ -74,10 +71,9 @@ const SubmitActivityPage = () => {
   if (step === 4) {
     return (
       <Result
-        icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />}
         status="success"
-        title="Активность подана!"
-        subTitle="Ваша активность отправлена на проверку. Вы можете отследить статус в разделе «Мои активности»."
+        title="Активность подана"
+        subTitle="Ваша активность отправлена на проверку. Статус можно отследить в разделе «Мои активности»."
         extra={
           <Button type="primary" onClick={() => setStep(0)}>
             Подать ещё одну
@@ -89,28 +85,45 @@ const SubmitActivityPage = () => {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-6">Подать активность</h1>
+      <Title level={3} style={{ marginBottom: 8, fontWeight: 600 }}>Подать активность</Title>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+        Загрузите подтверждающий документ в формате PDF
+      </Text>
 
       {submitting && (
-        <Steps
-          current={step - 1}
-          className="mb-6"
-          items={[
-            { title: 'Создание' },
-            { title: 'Загрузка файла' },
-            { title: 'Подтверждение' },
-          ]}
-        />
+        <Card bordered={false} style={{ marginBottom: 24, boxShadow: '0 1px 4px rgba(0,0,0,.08)' }}>
+          <Steps
+            current={step - 1}
+            size="small"
+            items={[
+              { title: 'Создание' },
+              { title: 'Загрузка файла' },
+              { title: 'Подтверждение' },
+            ]}
+          />
+        </Card>
       )}
 
-      <Card style={{ maxWidth: 640 }}>
-        <Form form={form} layout="vertical" onFinish={handleSubmit} requiredMark="optional">
+      <Card
+        bordered={false}
+        style={{ maxWidth: 600, boxShadow: '0 1px 4px rgba(0,0,0,.08)' }}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+          requiredMark="optional"
+          style={{ maxWidth: 520 }}
+        >
           <Form.Item
             label="Название"
             name="title"
             rules={[{ required: true, message: 'Введите название активности' }]}
           >
-            <Input placeholder="Например: Участие в хакатоне HSE Cup 2025" />
+            <Input
+              size="large"
+              placeholder="Например: Участие в хакатоне HSE Cup 2025"
+            />
           </Form.Item>
 
           <Form.Item
@@ -119,22 +132,29 @@ const SubmitActivityPage = () => {
             rules={[{ required: true, message: 'Выберите категорию' }]}
           >
             <Select
+              size="large"
               placeholder="Выберите категорию"
               options={CATEGORIES.map((c) => ({ label: c, value: c }))}
             />
           </Form.Item>
 
-          <Form.Item label="Описание" name="description">
+          <Form.Item label="Описание (необязательно)" name="description">
             <Input.TextArea
-              placeholder="Краткое описание достижения"
               rows={3}
+              placeholder="Краткое описание достижения"
+              style={{ resize: 'none' }}
             />
           </Form.Item>
 
           <Form.Item
-            label="PDF-документ (подтверждение)"
+            label="Документ"
             required
-            help="Загрузите скан грамоты, сертификата или справки"
+            help={
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Скан грамоты, сертификата или справки. Только PDF, до 50 МБ.
+              </Text>
+            }
+            style={{ marginBottom: 24 }}
           >
             <Upload
               accept=".pdf"
@@ -150,24 +170,29 @@ const SubmitActivityPage = () => {
                   return Upload.LIST_IGNORE
                 }
                 setFileList([{ ...file, uid: file.uid, name: file.name, originFileObj: file }])
-                return false // не отправляем через antd, делаем сами
+                setError(null)
+                return false
               }}
               onRemove={() => setFileList([])}
             >
-              <Button icon={<UploadOutlined />}>Выбрать файл</Button>
+              <Button icon={<UploadOutlined />} size="large" style={{ width: '100%' }}>
+                Выбрать файл
+              </Button>
             </Upload>
           </Form.Item>
 
           {error && (
-            <div className="mb-4 text-red-500 text-sm">{error}</div>
+            <Alert message={error} type="error" showIcon style={{ marginBottom: 16 }} />
           )}
 
           <Button
             type="primary"
             htmlType="submit"
             block
+            size="large"
             loading={submitting}
             disabled={fileList.length === 0}
+            icon={<SendOutlined />}
           >
             Отправить на проверку
           </Button>

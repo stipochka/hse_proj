@@ -50,6 +50,7 @@ func (h *Handler) UploadURL(w http.ResponseWriter, r *http.Request) {
 	pdfKey := "activities/" + randomHex(16) + ".pdf"
 	id, err := h.st.CreateActivity(r.Context(), domain.Activity{
 		StudentID:    sub(r),
+		StudentName:  username(r),
 		StudentGroup: group(r),
 		Title:        in.Title,
 		Category:     in.Category,

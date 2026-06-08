@@ -1,14 +1,24 @@
 import { useState } from 'react'
-import { Layout, Menu, Button, Dropdown, Space, Avatar } from 'antd'
+import { Layout, Menu, Button, Dropdown, Space, Avatar, Typography } from 'antd'
 import type { MenuProps } from 'antd'
-
-type UserMenuItems = MenuProps['items']
-import { MenuFoldOutlined, MenuUnfoldOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
+import {
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  LogoutOutlined,
+  DashboardOutlined,
+  PlusCircleOutlined,
+  FileTextOutlined,
+  AuditOutlined,
+  TeamOutlined,
+  ExportOutlined,
+  DownOutlined,
+} from '@ant-design/icons'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/app/store/authStore'
 import { logout as keycloakLogout } from '@/shared/lib/keycloak'
 
 const { Header, Sider, Content } = Layout
+const { Text } = Typography
 
 interface MainLayoutProps {
   children: React.ReactNode
@@ -30,106 +40,103 @@ const MainLayout = ({ children }: MainLayoutProps) => {
   }
 
   const studentItems = [
-    {
-      key: '/',
-      label: <Link to="/">Дашборд</Link>,
-      icon: <span>📊</span>,
-    },
-    {
-      key: '/submit',
-      label: <Link to="/submit">Подать активность</Link>,
-      icon: <span>📤</span>,
-    },
-    {
-      key: '/activities',
-      label: <Link to="/activities">Мои активности</Link>,
-      icon: <span>📋</span>,
-    },
-    {
-      key: '/export',
-      label: <Link to="/export">Экспорт</Link>,
-      icon: <span>📥</span>,
-    },
+    { key: '/', label: <Link to="/">Дашборд</Link>, icon: <DashboardOutlined /> },
+    { key: '/submit', label: <Link to="/submit">Подать активность</Link>, icon: <PlusCircleOutlined /> },
+    { key: '/activities', label: <Link to="/activities">Мои активности</Link>, icon: <FileTextOutlined /> },
+    { key: '/export', label: <Link to="/export">Экспорт</Link>, icon: <ExportOutlined /> },
   ]
 
   const adminItems = [
-    {
-      key: '/',
-      label: <Link to="/">Дашборд</Link>,
-      icon: <span>📊</span>,
-    },
-    {
-      key: '/activities',
-      label: <Link to="/activities">Активности на проверку</Link>,
-      icon: <span>✓</span>,
-    },
-    {
-      key: '/group-students',
-      label: <Link to="/group-students">Студенты группы</Link>,
-      icon: <span>👥</span>,
-    },
-    {
-      key: '/export',
-      label: <Link to="/export">Экспорт</Link>,
-      icon: <span>📥</span>,
-    },
+    { key: '/', label: <Link to="/">Дашборд</Link>, icon: <DashboardOutlined /> },
+    { key: '/activities', label: <Link to="/activities">На проверку</Link>, icon: <AuditOutlined /> },
+    { key: '/group-students', label: <Link to="/group-students">Студенты</Link>, icon: <TeamOutlined /> },
+    { key: '/export', label: <Link to="/export">Экспорт</Link>, icon: <ExportOutlined /> },
   ]
 
-  const menuItems = admin ? adminItems : studentItems
-
-  const userMenuItems: UserMenuItems = user ? [
-    {
-      key: 'profile',
-      label: 'Профиль',
-      icon: <UserOutlined />,
-    },
-    {
-      type: 'divider',
-    },
-    {
-      key: 'logout',
-      label: 'Выход',
-      icon: <LogoutOutlined />,
-      onClick: handleLogout,
-    },
-  ] : []
+  const userDropdown: MenuProps['items'] = [
+    { key: 'logout', label: 'Выйти', icon: <LogoutOutlined />, onClick: handleLogout },
+  ]
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider trigger={null} collapsible collapsed={collapsed} theme="dark">
-        <div className="logo p-4 text-white text-lg font-bold text-center">
-          {!collapsed && 'HSE Активности'}
+      <Sider
+        trigger={null}
+        collapsible
+        collapsed={collapsed}
+        width={220}
+        style={{ background: '#fff', borderRight: '1px solid #f0f0f0' }}
+      >
+        <div style={{
+          height: 64,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'flex-start',
+          padding: collapsed ? 0 : '0 20px',
+          borderBottom: '1px solid #f0f0f0',
+          overflow: 'hidden',
+        }}>
+          {collapsed ? (
+            <div style={{
+              width: 32, height: 32, borderRadius: 8,
+              background: '#1677ff', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Text style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>H</Text>
+            </div>
+          ) : (
+            <Space>
+              <div style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: '#1677ff', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <Text style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>H</Text>
+              </div>
+              <Text strong style={{ fontSize: 15 }}>HSE Активности</Text>
+            </Space>
+          )}
         </div>
         <Menu
-          theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
-          items={menuItems}
+          items={admin ? adminItems : studentItems}
+          style={{ border: 'none', marginTop: 8 }}
         />
       </Sider>
+
       <Layout>
-        <Header
-          className="bg-white shadow-sm flex items-center justify-between"
-          style={{ padding: '0 24px' }}
-        >
+        <Header style={{
+          background: '#fff',
+          borderBottom: '1px solid #f0f0f0',
+          padding: '0 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          height: 64,
+        }}>
           <Button
             type="text"
             icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             onClick={() => setCollapsed(!collapsed)}
-            size="large"
+            style={{ fontSize: 16, width: 40, height: 40 }}
           />
-          <Space>
-            {user ? (
-              <Dropdown menu={{ items: userMenuItems }} trigger={['click']}>
-                <Space style={{ cursor: 'pointer' }}>
-                  <Avatar icon={<UserOutlined />} />
-                  <span>{user.firstName || user.username}</span>
-                </Space>
-              </Dropdown>
-            ) : null}
-          </Space>
+          {user && (
+            <Dropdown menu={{ items: userDropdown }} trigger={['click']}>
+              <Space style={{ cursor: 'pointer' }}>
+                <Avatar
+                  size={32}
+                  style={{ background: '#1677ff', fontSize: 13 }}
+                >
+                  {(user.firstName || user.username || '?')[0].toUpperCase()}
+                </Avatar>
+                <Text style={{ fontSize: 14 }}>{user.firstName || user.username}</Text>
+                <DownOutlined style={{ fontSize: 11, color: '#8c8c8c' }} />
+              </Space>
+            </Dropdown>
+          )}
         </Header>
-        <Content className="m-6 p-6 bg-gray-50 rounded-lg min-h-[calc(100vh-113px)]">
+
+        <Content style={{ margin: '24px', minHeight: 'calc(100vh - 112px)' }}>
           {children}
         </Content>
       </Layout>

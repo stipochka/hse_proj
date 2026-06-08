@@ -10,17 +10,16 @@ type ctxSubKey struct{}
 type ctxRoleKey struct{}
 type ctxGroupKey struct{}
 type ctxEmailKey struct{}
+type ctxUsernameKey struct{}
 
-// rolePriority decides which role wins when the token carries several.
 var rolePriority = map[string]int{"student": 0, "group_admin": 1, "super_admin": 2}
 
-// identity is everything we need about the caller, derived purely from the JWT.
-// Nothing about users/groups is stored in our DB — Keycloak is the source of truth.
 type identity struct {
-	sub   string // Keycloak user id
-	email string
-	role  string
-	group string // student's / curator's Keycloak group (first of the `groups` claim)
+	sub      string
+	email    string
+	username string // preferred_username
+	role     string
+	group    string
 }
 
 func (h *Handler) authenticate(r *http.Request) (identity, error) {
@@ -39,8 +38,8 @@ func (h *Handler) authenticate(r *http.Request) (identity, error) {
 		return id, errUnauthorized("missing sub claim")
 	}
 	id.email, _ = claims["email"].(string)
+	id.username, _ = claims["preferred_username"].(string)
 
-	// Highest-priority realm role.
 	id.role = "student"
 	if ra, ok := claims["realm_access"].(map[string]any); ok {
 		if roles, ok := ra["roles"].([]any); ok {
@@ -54,7 +53,6 @@ func (h *Handler) authenticate(r *http.Request) (identity, error) {
 		}
 	}
 
-	// Group from the Keycloak `groups` membership claim (first entry, path stripped).
 	if gs, ok := claims["groups"].([]any); ok {
 		for _, gv := range gs {
 			if g, ok := gv.(string); ok && g != "" {
@@ -81,15 +79,14 @@ func (h *Handler) withIdentity(w http.ResponseWriter, r *http.Request, next http
 	ctx = context.WithValue(ctx, ctxRoleKey{}, id.role)
 	ctx = context.WithValue(ctx, ctxGroupKey{}, id.group)
 	ctx = context.WithValue(ctx, ctxEmailKey{}, id.email)
+	ctx = context.WithValue(ctx, ctxUsernameKey{}, id.username)
 	next(w, r.WithContext(ctx))
 }
 
-// Auth allows any authenticated user.
 func (h *Handler) Auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { h.withIdentity(w, r, next) }
 }
 
-// AuthAdmin allows group_admin and super_admin only.
 func (h *Handler) AuthAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h.withIdentity(w, r, func(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +99,7 @@ func (h *Handler) AuthAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func sub(r *http.Request) string   { v, _ := r.Context().Value(ctxSubKey{}).(string); return v }
-func role(r *http.Request) string  { v, _ := r.Context().Value(ctxRoleKey{}).(string); return v }
-func group(r *http.Request) string { v, _ := r.Context().Value(ctxGroupKey{}).(string); return v }
+func sub(r *http.Request) string      { v, _ := r.Context().Value(ctxSubKey{}).(string); return v }
+func role(r *http.Request) string     { v, _ := r.Context().Value(ctxRoleKey{}).(string); return v }
+func group(r *http.Request) string    { v, _ := r.Context().Value(ctxGroupKey{}).(string); return v }
+func username(r *http.Request) string { v, _ := r.Context().Value(ctxUsernameKey{}).(string); return v }

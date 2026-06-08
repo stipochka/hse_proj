@@ -30,9 +30,9 @@ func New(db *pgxpool.Pool) *Store {
 func (s *Store) CreateActivity(ctx context.Context, a domain.Activity) (int64, error) {
 	var id int64
 	err := s.db.QueryRow(ctx,
-		`INSERT INTO activities (student_id, student_group, title, category, description, pdf_key, status)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-		a.StudentID, a.StudentGroup, a.Title, a.Category, a.Description, a.PDFKey, domain.StatusPending,
+		`INSERT INTO activities (student_id, student_name, student_group, title, category, description, pdf_key, status)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+		a.StudentID, a.StudentName, a.StudentGroup, a.Title, a.Category, a.Description, a.PDFKey, domain.StatusPending,
 	).Scan(&id)
 	return id, err
 }
@@ -57,9 +57,9 @@ func (s *Store) ConfirmActivity(ctx context.Context, id int64, studentID string)
 func (s *Store) GetActivity(ctx context.Context, id int64) (*domain.Activity, error) {
 	var a domain.Activity
 	err := s.db.QueryRow(ctx,
-		`SELECT id, student_id, student_group, title, category, description, pdf_key, status, created_at
+		`SELECT id, student_id, student_name, student_group, title, category, description, pdf_key, status, created_at
 		 FROM activities WHERE id=$1`, id,
-	).Scan(&a.ID, &a.StudentID, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt)
+	).Scan(&a.ID, &a.StudentID, &a.StudentName, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -128,7 +128,7 @@ func (s *Store) ListActivities(ctx context.Context, f ActivityFilter) ([]domain.
 
 func (s *Store) queryActivities(ctx context.Context, where string, args []any) ([]domain.Activity, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT a.id, a.student_id, a.student_group, a.title, a.category, a.description, a.pdf_key, a.status, a.created_at,
+		SELECT a.id, a.student_id, a.student_name, a.student_group, a.title, a.category, a.description, a.pdf_key, a.status, a.created_at,
 		       e.id, e.activity_id, e.admin_id, e.points, e.credits, e.comment, e.evaluated_at
 		FROM activities a
 		LEFT JOIN evaluations e ON e.activity_id = a.id
@@ -151,7 +151,7 @@ func (s *Store) queryActivities(ctx context.Context, where string, args []any) (
 			evAt               *time.Time
 		)
 		if err := rows.Scan(
-			&a.ID, &a.StudentID, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt,
+			&a.ID, &a.StudentID, &a.StudentName, &a.StudentGroup, &a.Title, &a.Category, &a.Description, &a.PDFKey, &a.Status, &a.CreatedAt,
 			&evID, &evActID, &evAdmin, &evPoints, &evCredits, &evComment, &evAt,
 		); err != nil {
 			return nil, err

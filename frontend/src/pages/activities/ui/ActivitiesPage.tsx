@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Table, Space, Button, Spin, Empty, Select, Row, Col } from 'antd'
-import { CheckOutlined, EyeOutlined } from '@ant-design/icons'
+import { Table, Space, Button, Spin, Empty, Select, Card, Typography } from 'antd'
+import { CheckOutlined, FilePdfOutlined, FilterOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
-import FilterBar from '@/shared/components/FilterBar'
 import { StatusTag } from '@/shared/components/StatusTag'
 import { activitiesAPI } from '@/shared/api/activities'
 import { useAuthStore } from '@/app/store/authStore'
 import { ACTIVITY_STATUS } from '@/shared/constants'
 import { formatDate } from '@/shared/lib/utils'
 import type { Activity, FilterOptions } from '@/shared/types'
+
+const { Title } = Typography
 
 const isAdmin = (roles: string[]) =>
   roles.includes('group_admin') || roles.includes('super_admin')
@@ -25,12 +26,12 @@ const ActivitiesPage = () => {
     admin ? ACTIVITY_STATUS.SUBMITTED : undefined
   )
 
-  const fetchActivities = async (appliedFilters: FilterOptions = {}) => {
+  const fetchActivities = async (filters: FilterOptions = {}) => {
     setLoading(true)
     try {
       const data = admin
-        ? await activitiesAPI.getActivities(appliedFilters)
-        : await activitiesAPI.getMyActivities(appliedFilters)
+        ? await activitiesAPI.getActivities(filters)
+        : await activitiesAPI.getMyActivities(filters)
       setActivities(data)
     } catch (error) {
       console.error('Failed to fetch activities:', error)
@@ -43,90 +44,56 @@ const ActivitiesPage = () => {
     fetchActivities(admin ? { status: statusFilter } : { status: statusFilter })
   }, [])
 
-  const handleFilterChange = (newFilters: FilterOptions) => {
-    fetchActivities({ ...newFilters, status: statusFilter })
-  }
-
-  const handleStatusFilterChange = (value: string | undefined) => {
+  const handleStatusChange = (value: string | undefined) => {
     setStatusFilter(value)
     fetchActivities({ status: value })
   }
 
-  const handleEvaluate = (activityId: number) => {
-    navigate(`/activities/${activityId}/evaluate`)
-  }
-
   const handleViewFile = async (activity: Activity) => {
-    const win = window.open('', '_blank') // открываем окно синхронно — иначе браузер блокирует
+    const win = window.open('', '_blank')
     try {
-      const fileUrlData = await activitiesAPI.getFileUrl(activity.id)
-      if (win) win.location.href = fileUrlData.file_url
-    } catch (error) {
+      const { file_url } = await activitiesAPI.getFileUrl(activity.id)
+      if (win) win.location.href = file_url
+    } catch {
       win?.close()
-      console.error('Failed to get file URL:', error)
     }
   }
 
   const columns: ColumnsType<Activity> = [
-    {
-      title: '№',
-      key: 'index',
-      width: 50,
-      render: (_, __, index) => index + 1,
-    },
-    {
-      title: 'Название',
-      dataIndex: 'title',
-      key: 'title',
-    },
-    {
-      title: 'Описание',
-      dataIndex: 'description',
-      key: 'description',
-      ellipsis: true,
-    },
+    { title: '№', key: 'index', width: 56, render: (_, __, i) => i + 1 },
+    { title: 'Название', dataIndex: 'title', key: 'title', ellipsis: true },
+    { title: 'Категория', dataIndex: 'category', key: 'category', width: 180 },
     ...(admin
       ? [
-          {
-            title: 'Студент',
-            dataIndex: 'student_id',
-            key: 'student_id',
-            ellipsis: true,
-          },
-          {
-            title: 'Группа',
-            dataIndex: 'student_group',
-            key: 'student_group',
-          },
+          { title: 'Студент', dataIndex: 'student_name', key: 'student_name', ellipsis: true },
+          { title: 'Группа', dataIndex: 'student_group', key: 'student_group', width: 120 },
         ]
-      : []),
-    {
-      title: 'Категория',
-      dataIndex: 'category',
-      key: 'category',
-    },
+      : [
+          { title: 'Описание', dataIndex: 'description', key: 'description', ellipsis: true },
+        ]),
     {
       title: 'Статус',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => <StatusTag status={status} />,
+      width: 140,
+      render: (s: string) => <StatusTag status={s} />,
     },
     {
-      title: 'Создано',
+      title: 'Дата',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (date: string) => formatDate(date),
+      width: 110,
+      render: (d: string) => formatDate(d),
     },
     {
-      title: 'Действия',
+      title: '',
       key: 'actions',
-      width: 150,
+      width: 140,
       render: (_, record) => (
-        <Space size="small">
+        <Space size={8}>
           <Button
-            type="primary"
             size="small"
-            icon={<EyeOutlined />}
+            icon={<FilePdfOutlined />}
             onClick={() => handleViewFile(record)}
           >
             PDF
@@ -136,7 +103,7 @@ const ActivitiesPage = () => {
               type="primary"
               size="small"
               icon={<CheckOutlined />}
-              onClick={() => handleEvaluate(record.id)}
+              onClick={() => navigate(`/activities/${record.id}/evaluate`)}
             >
               Оценить
             </Button>
@@ -148,47 +115,49 @@ const ActivitiesPage = () => {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-6">
+      <Title level={3} style={{ marginBottom: 24, fontWeight: 600 }}>
         {admin ? 'Активности на проверку' : 'Мои активности'}
-      </h1>
+      </Title>
 
-      {admin && <FilterBar onFilterChange={handleFilterChange} />}
-
-      <div className="bg-white p-4 rounded-lg shadow-sm mb-6">
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12} md={8}>
-            <Select
-              placeholder="Фильтр по статусу"
-              allowClear
-              value={statusFilter}
-              onChange={handleStatusFilterChange}
-              style={{ width: '100%' }}
-              options={[
-                { label: 'В ожидании', value: ACTIVITY_STATUS.PENDING },
-                { label: 'На проверку', value: ACTIVITY_STATUS.SUBMITTED },
-                { label: 'Проверено', value: ACTIVITY_STATUS.EVALUATED },
-                { label: 'Отклонено', value: ACTIVITY_STATUS.REJECTED },
-              ]}
-            />
-          </Col>
-        </Row>
-      </div>
+      <Card
+        bordered={false}
+        style={{ marginBottom: 16, boxShadow: '0 1px 4px rgba(0,0,0,.08)' }}
+        styles={{ body: { padding: '16px 20px' } }}
+      >
+        <Space align="center">
+          <FilterOutlined style={{ color: '#8c8c8c' }} />
+          <Select
+            placeholder="Все статусы"
+            allowClear
+            value={statusFilter}
+            onChange={handleStatusChange}
+            style={{ width: 200 }}
+            options={[
+              { label: 'В ожидании', value: ACTIVITY_STATUS.PENDING },
+              { label: 'На проверку', value: ACTIVITY_STATUS.SUBMITTED },
+              { label: 'Проверено', value: ACTIVITY_STATUS.EVALUATED },
+              { label: 'Отклонено', value: ACTIVITY_STATUS.REJECTED },
+            ]}
+          />
+        </Space>
+      </Card>
 
       {loading ? (
-        <div className="flex justify-center items-center h-96">
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
           <Spin size="large" />
         </div>
       ) : activities.length === 0 ? (
-        <Empty description="Нет активностей" />
+        <Empty description="Нет активностей" style={{ padding: '80px 0' }} />
       ) : (
-        <Table
-          columns={columns}
-          dataSource={activities}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          className="bg-white rounded-lg"
-        />
+        <Card bordered={false} style={{ boxShadow: '0 1px 4px rgba(0,0,0,.08)' }}>
+          <Table
+            columns={columns}
+            dataSource={activities}
+            rowKey="id"
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            size="middle"
+          />
+        </Card>
       )}
     </div>
   )

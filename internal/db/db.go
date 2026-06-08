@@ -19,10 +19,21 @@ func NewPool(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Migrate runs schema migrations idempotently (all statements use IF NOT EXISTS).
+// Migrate runs schema migrations idempotently.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, schema)
-	return err
+	if _, err := pool.Exec(ctx, schema); err != nil {
+		return err
+	}
+	// Column additions for existing tables — ADD COLUMN IF NOT EXISTS is idempotent.
+	alterations := []string{
+		`ALTER TABLE activities ADD COLUMN IF NOT EXISTS student_name TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, q := range alterations {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const schema = `
@@ -34,6 +45,7 @@ CREATE TABLE IF NOT EXISTS activities (
     category      TEXT        NOT NULL DEFAULT '',
     description   TEXT        NOT NULL DEFAULT '',
     pdf_key       TEXT        NOT NULL DEFAULT '',
+    student_name  TEXT        NOT NULL DEFAULT '',
     status        TEXT        NOT NULL DEFAULT 'PENDING',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
