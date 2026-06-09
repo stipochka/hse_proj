@@ -31,6 +31,7 @@ export interface DashboardMe {
 
 export interface StudentStats {
   student_id: string
+  student_name: string
   student_group: string
   activity_count: number
   evaluated_count: number

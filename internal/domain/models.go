@@ -40,6 +40,7 @@ type Evaluation struct {
 // StudentStats is one aggregate row of the admin summary, keyed by Keycloak id.
 type StudentStats struct {
 	StudentID      string  `json:"student_id"`
+	StudentName    string  `json:"student_name"`
 	StudentGroup   string  `json:"student_group"`
 	TotalPoints    int64   `json:"total_points"`
 	TotalCredits   float64 `json:"total_credits"`

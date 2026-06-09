@@ -64,7 +64,12 @@ const DashboardPage = () => {
 
   const summaryColumns: ColumnsType<StudentStats> = [
     { title: '№', key: 'index', width: 56, render: (_, __, i) => i + 1 },
-    { title: 'Студент', dataIndex: 'student_id', key: 'student_id', ellipsis: true },
+    {
+      title: 'Студент',
+      key: 'student',
+      ellipsis: true,
+      render: (_: unknown, r: StudentStats) => r.student_name || r.student_id,
+    },
     { title: 'Группа', dataIndex: 'student_group', key: 'student_group', width: 130 },
     {
       title: 'Активностей',

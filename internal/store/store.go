@@ -297,6 +297,7 @@ func (s *Store) Summary(ctx context.Context, f SummaryFilter) ([]domain.StudentS
 
 	rows, err := s.db.Query(ctx, `
 		SELECT a.student_id,
+		       COALESCE(MAX(a.student_name),'')  AS student_name,
 		       COALESCE(MAX(a.student_group),'') AS student_group,
 		       COALESCE(SUM(e.points),0)  AS total_points,
 		       COALESCE(SUM(e.credits),0) AS total_credits,
@@ -315,7 +316,7 @@ func (s *Store) Summary(ctx context.Context, f SummaryFilter) ([]domain.StudentS
 	list := []domain.StudentStats{}
 	for rows.Next() {
 		var ss domain.StudentStats
-		if err := rows.Scan(&ss.StudentID, &ss.StudentGroup, &ss.TotalPoints, &ss.TotalCredits, &ss.ActivityCount, &ss.EvaluatedCount); err != nil {
+		if err := rows.Scan(&ss.StudentID, &ss.StudentName, &ss.StudentGroup, &ss.TotalPoints, &ss.TotalCredits, &ss.ActivityCount, &ss.EvaluatedCount); err != nil {
 			return nil, err
 		}
 		list = append(list, ss)
