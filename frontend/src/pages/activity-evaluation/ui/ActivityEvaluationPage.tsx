@@ -163,10 +163,10 @@ const ActivityEvaluationPage = () => {
               >
                 <InputNumber style={{ width: '100%' }} placeholder="0" />
               </Form.Item>
-              <Form.Item label="Зачётные единицы (необязательно)" name="credits">
+              <Form.Item label="Зачётные единицы" name="credits">
                 <InputNumber style={{ width: '100%' }} placeholder="0.00" step={0.1} min={0} />
               </Form.Item>
-              <Form.Item label="Комментарий (необязательно)" name="comment">
+              <Form.Item label="Комментарий" name="comment">
                 <Input.TextArea rows={3} placeholder="Комментарий к оценке" style={{ resize: 'none' }} />
               </Form.Item>
 

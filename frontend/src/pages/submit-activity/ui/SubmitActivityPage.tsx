@@ -138,7 +138,7 @@ const SubmitActivityPage = () => {
             />
           </Form.Item>
 
-          <Form.Item label="Описание (необязательно)" name="description">
+          <Form.Item label="Описание" name="description">
             <Input.TextArea
               rows={3}
               placeholder="Краткое описание достижения"
